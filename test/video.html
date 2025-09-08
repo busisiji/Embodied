@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RealSense相机实时视频流测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1, h2, h3 {
+            color: #333;
+        }
+        .video-container {
+            position: relative;
+            display: inline-block;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .video-placeholder {
+            width: 640px;
+            height: 360px;
+            background-color: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 18px;
+        }
+        .controls {
+            margin: 15px 0;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            margin: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        button.stop {
+            background-color: #dc3545;
+        }
+        button.stop:hover {
+            background-color: #c82333;
+        }
+        button.success {
+            background-color: #28a745;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .status.warning {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            max-width: 300px;
+        }
+        .login-form input {
+            margin: 5px 0;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            background-color: #e9ecef;
+            cursor: pointer;
+            border: 1px solid #ddd;
+            border-bottom: none;
+        }
+        .tab.active {
+            background-color: white;
+            border-bottom: 1px solid white;
+            margin-bottom: -1px;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .camera-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .camera-control-group {
+            flex: 1;
+            min-width: 200px;
+        }
+        .token-input {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        .token-input input {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>RealSense相机实时视频流测试</h1>
+
+    <!-- 相机控制部分 -->
+    <div class="container">
+        <h2>相机控制</h2>
+        <div class="camera-controls">
+            <div class="camera-control-group">
+                <h3>操作</h3>
+                <button id="start-camera" onclick="startCamera()">启动相机</button>
+                <button id="stop-camera" onclick="stopCamera()" disabled>停止相机</button>
+            </div>
+            <div class="camera-control-group">
+                <h3>相机状态</h3>
+                <button onclick="checkCameraStatus()">检查相机状态</button>
+                <div id="camera-status" class="status info">未知状态</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 视频流测试部分 -->
+    <div class="container">
+        <h2>视频流测试</h2>
+
+        <!-- 标签页 -->
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('websocket')">WebSocket 流</div>
+            <div class="tab" onclick="switchTab('mjpeg')">MJPEG 流</div>
+        </div>
+
+        <!-- WebSocket 视频流 -->
+        <div id="websocket" class="tab-content active">
+            <h3>WebSocket 实时视频流</h3>
+            <div class="video-container">
+                <div id="ws-video-placeholder" class="video-placeholder">
+                    WebSocket 视频流
+                </div>
+                <img id="video-stream" style="display: none; width: 640px; height: 360px;">
+            </div>
+            <div class="controls">
+                <button id="start-ws-stream" onclick="startWebSocketStream()">开始 WebSocket 流</button>
+                <button id="stop-ws-stream" class="stop" onclick="stopWebSocketStream()" disabled>停止 WebSocket 流</button>
+                <button id="reconnect-ws" onclick="reconnectWebSocket()" disabled>重新连接</button>
+            </div>
+            <div id="ws-status" class="status info">WebSocket 流未连接</div>
+        </div>
+
+        <!-- MJPEG 视频流 -->
+        <div id="mjpeg" class="tab-content">
+            <h3>MJPEG 实时视频流</h3>
+            <div class="video-container">
+                <img id="mjpeg-stream" src="" alt="MJPEG 流" style="display: none; width: 640px; height: 360px;">
+                <div id="mjpeg-video-placeholder" class="video-placeholder">
+                    MJPEG 视频流
+                </div>
+            </div>
+            <div class="controls">
+                <button id="start-mjpeg-stream" onclick="startMJPEGStream()">开始 MJPEG 流</button>
+                <button id="stop-mjpeg-stream" class="stop" onclick="stopMJPEGStream()" disabled>停止 MJPEG 流</button>
+            </div>
+            <div id="mjpeg-status" class="status info">MJPEG 流未启动</div>
+        </div>
+    </div>
+
+    <script>
+        // 全局变量
+        let wsClient = null;
+        let mjpegStreamActive = false;
+        let mjpegStreamInterval = null;
+
+        // API 基础 URL
+        const API_BASE_URL = 'http://localhost:6018';
+
+        // 启用所有流按钮（因为不再需要token）
+        document.addEventListener('DOMContentLoaded', function() {
+            enableStreamButtons();
+        });
+
+        // 启用流按钮
+        function enableStreamButtons() {
+            document.getElementById('start-ws-stream').disabled = false;
+            document.getElementById('start-mjpeg-stream').disabled = false;
+        }
+
+        // 启动相机
+        async function startCamera() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/video/control/start`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showStatus('camera-status', data.message || '相机启动成功', 'success');
+                    // 启用相机控制按钮
+                    document.getElementById('stop-camera').disabled = false;
+                } else {
+                    showStatus('camera-status', `相机启动失败: ${data.detail || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                showStatus('camera-status', `请求失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 停止相机
+        async function stopCamera() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/video/control/stop`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showStatus('camera-status', data.message || '相机已停止', 'success');
+                    // 禁用停止按钮
+                    document.getElementById('stop-camera').disabled = true;
+                } else {
+                    showStatus('camera-status', `停止相机失败: ${data.detail || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                showStatus('camera-status', `请求失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 检查相机状态
+        async function checkCameraStatus() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/video/status`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    const statusText = `运行状态: ${data.running ? '运行中' : '已停止'} | 活跃连接: ${data.active_connections} | 支持格式: ${data.supported_formats}`;
+                    showStatus('camera-status', statusText, 'info');
+                } else {
+                    showStatus('camera-status', `获取状态失败: ${data.detail || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                showStatus('camera-status', `请求失败: ${error.message}`, 'error');
+            }
+        }
+
+        // WebSocket 视频流客户端
+        class VideoStreamClient {
+            constructor() {
+                this.ws = null;
+                this.isConnected = false;
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 5;
+            }
+
+            connect() {
+                showStatus('ws-status', '正在连接 WebSocket...', 'info');
+
+                // 使用正确的URL格式（无token参数）
+                this.ws = new WebSocket(`ws://localhost:6018/video/stream/ws`);
+
+                this.ws.onopen = () => {
+                    console.log('WebSocket 连接已建立');
+                    this.isConnected = true;
+                    this.reconnectAttempts = 0;
+                    showStatus('ws-status', 'WebSocket 连接成功，开始接收视频流', 'success');
+                    document.getElementById('start-ws-stream').disabled = true;
+                    document.getElementById('stop-ws-stream').disabled = false;
+                    document.getElementById('reconnect-ws').disabled = true;
+                };
+
+                this.ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+
+                        if (data.type === 'frame') {
+                            // 显示视频帧
+                            const imgElement = document.getElementById('video-stream');
+                            const placeholder = document.getElementById('ws-video-placeholder');
+
+                            imgElement.src = `data:image/jpeg;base64,${data.data}`;
+                            imgElement.style.display = 'block';
+                            placeholder.style.display = 'none';
+
+                            // 更新状态
+                            if (document.getElementById('ws-status').textContent.includes('连接成功')) {
+                                showStatus('ws-status', 'WebSocket 流传输中...', 'success');
+                            }
+                        } else if (data.status === 'connected') {
+                            showStatus('ws-status', 'WebSocket 连接成功，开始接收视频流', 'success');
+                            document.getElementById('start-ws-stream').disabled = true;
+                            document.getElementById('stop-ws-stream').disabled = false;
+                            document.getElementById('reconnect-ws').disabled = true;
+                        } else if (data.error) {
+                            showStatus('ws-status', `WebSocket 错误: ${data.error}`, 'error');
+                        }
+                    } catch (e) {
+                        console.error('解析 WebSocket 消息失败:', e);
+                    }
+                };
+
+                this.ws.onclose = () => {
+                    console.log('WebSocket 连接已关闭');
+                    this.isConnected = false;
+                    showStatus('ws-status', 'WebSocket 连接已断开', 'warning');
+                    document.getElementById('start-ws-stream').disabled = false;
+                    document.getElementById('stop-ws-stream').disabled = true;
+                    document.getElementById('reconnect-ws').disabled = false;
+
+                    // 显示占位符
+                    document.getElementById('video-stream').style.display = 'none';
+                    document.getElementById('ws-video-placeholder').style.display = 'flex';
+                };
+
+                this.ws.onerror = (error) => {
+                    console.error('WebSocket 错误:', error);
+                    showStatus('ws-status', `WebSocket 连接错误: ${error.message}`, 'error');
+                };
+            }
+
+            disconnect() {
+                if (this.ws) {
+                    this.ws.close();
+                    this.ws = null;
+                }
+                this.isConnected = false;
+            }
+        }
+
+        // 开始 WebSocket 流
+        function startWebSocketStream() {
+            if (wsClient && wsClient.isConnected) {
+                showStatus('ws-status', 'WebSocket 流已在运行', 'warning');
+                return;
+            }
+
+            wsClient = new VideoStreamClient();
+            wsClient.connect();
+        }
+
+        // 停止 WebSocket 流
+        function stopWebSocketStream() {
+            if (wsClient) {
+                wsClient.disconnect();
+                wsClient = null;
+            }
+
+            showStatus('ws-status', 'WebSocket 流已停止', 'info');
+            document.getElementById('start-ws-stream').disabled = false;
+            document.getElementById('stop-ws-stream').disabled = true;
+            document.getElementById('reconnect-ws').disabled = true;
+
+            // 显示占位符
+            document.getElementById('video-stream').style.display = 'none';
+            document.getElementById('ws-video-placeholder').style.display = 'flex';
+        }
+
+        // 重新连接 WebSocket
+        function reconnectWebSocket() {
+            stopWebSocketStream();
+            setTimeout(() => {
+                startWebSocketStream();
+            }, 1000);
+        }
+
+        // 开始 MJPEG 流
+        function startMJPEGStream() {
+            if (mjpegStreamActive) {
+                showStatus('mjpeg-status', 'MJPEG 流已在运行', 'warning');
+                return;
+            }
+
+            const imgElement = document.getElementById('mjpeg-stream');
+            const placeholder = document.getElementById('mjpeg-video-placeholder');
+
+            // 设置 MJPEG 流 URL（无token参数）
+            imgElement.src = `${API_BASE_URL}/video/stream/mjpeg`;
+            imgElement.style.display = 'block';
+            placeholder.style.display = 'none';
+
+            mjpegStreamActive = true;
+            showStatus('mjpeg-status', 'MJPEG 流已启动', 'success');
+            document.getElementById('start-mjpeg-stream').disabled = true;
+            document.getElementById('stop-mjpeg-stream').disabled = false;
+        }
+
+        // 停止 MJPEG 流
+        function stopMJPEGStream() {
+            if (!mjpegStreamActive) {
+                return;
+            }
+
+            const imgElement = document.getElementById('mjpeg-stream');
+            const placeholder = document.getElementById('mjpeg-video-placeholder');
+
+            imgElement.src = '';
+            imgElement.style.display = 'none';
+            placeholder.style.display = 'flex';
+
+            mjpegStreamActive = false;
+            showStatus('mjpeg-status', 'MJPEG 流已停止', 'info');
+            document.getElementById('start-mjpeg-stream').disabled = false;
+            document.getElementById('stop-mjpeg-stream').disabled = true;
+        }
+
+        // 标签页切换
+        function switchTab(tabName) {
+            // 隐藏所有标签内容
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // 移除所有标签的活动状态
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // 显示选中的标签内容
+            document.getElementById(tabName).classList.add('active');
+
+            // 设置选中标签为活动状态
+            event.target.classList.add('active');
+        }
+
+        // 显示状态信息
+        function showStatus(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            element.textContent = message;
+            element.className = `status ${type}`;
+        }
+
+        // 页面加载完成后的初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            // 默认检查一次相机状态
+            setTimeout(checkCameraStatus, 1000);
+        });
+    </script>
+</body>
+</html>

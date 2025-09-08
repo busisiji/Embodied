@@ -1,0 +1,24 @@
+type: yolov8
+name: yolov8m-r20230520
+display_name: YOLOv8m Ultralytics
+model_path: best.onnx
+nms_threshold: 0.45
+confidence_threshold: 0.25
+
+classes:
+  - A
+  - B
+  - C
+  - K
+  - N
+  - P
+  - R
+  - a
+  - b
+  - c
+  - k
+  - n
+  - p
+  - r
+
+

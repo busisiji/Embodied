@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模型服务WebSocket测试平台</title>
+    <style>
+        :root {
+            --primary-color: #007bff;
+            --success-color: #28a745;
+            --warning-color: #ffc107;
+            --danger-color: #dc3545;
+            --info-color: #17a2b8;
+            --light-color: #f8f9fa;
+            --dark-color: #343a40;
+            --gray-color: #6c757d;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f7fa;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--primary-color), #0056b3);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        h1, h2, h3 {
+            margin-bottom: 15px;
+        }
+
+        h1 {
+            font-size: 2rem;
+        }
+
+        .main-content {
+            display: flex;
+            flex-wrap: wrap;
+            padding: 20px;
+        }
+
+        .panel {
+            flex: 1;
+            min-width: 300px;
+            margin: 10px;
+            padding: 20px;
+            border-radius: 8px;
+            background: #fff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .panel:first-child {
+            flex: 2;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            border-color: var(--primary-color);
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+        }
+
+        .btn-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            flex: 1;
+            min-width: 120px;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .btn-success {
+            background-color: var(--success-color);
+            color: white;
+        }
+
+        .btn-warning {
+            background-color: var(--warning-color);
+            color: #212529;
+        }
+
+        .btn-danger {
+            background-color: var(--danger-color);
+            color: white;
+        }
+
+        .btn-info {
+            background-color: var(--info-color);
+            color: white;
+        }
+
+        button:hover {
+            opacity: 0.9;
+            transform: translateY(-2px);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-connected {
+            background-color: var(--success-color);
+        }
+
+        .status-disconnected {
+            background-color: var(--danger-color);
+        }
+
+        .status-connecting {
+            background-color: var(--warning-color);
+        }
+
+        .log-container {
+            height: 400px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .log-header {
+            background-color: var(--dark-color);
+            color: white;
+            padding: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .log-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+            background-color: #f8f9fa;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .log-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .log-timestamp {
+            color: var(--gray-color);
+            margin-right: 10px;
+        }
+
+        .log-error {
+            color: var(--danger-color);
+        }
+
+        .log-success {
+            color: var(--success-color);
+        }
+
+        .log-warning {
+            color: var(--warning-color);
+        }
+
+        .log-info {
+            color: var(--info-color);
+        }
+
+        .log-debug {
+            color: var(--gray-color);
+        }
+
+        .process-error {
+            background-color: #f8d7da;
+            border-left: 4px solid var(--danger-color);
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 0 4px 4px 0;
+        }
+
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-radius: 4px 4px 0 0;
+            background-color: #f8f9fa;
+        }
+
+        .tab.active {
+            background-color: white;
+            border-color: #ddd;
+            font-weight: bold;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .stat-item {
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            flex: 1;
+            margin: 0 10px;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--primary-color);
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--gray-color);
+        }
+
+        .filter-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .filter-btn {
+            flex: 1;
+            padding: 5px;
+            font-size: 12px;
+        }
+
+        .active-filter {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        footer {
+            text-align: center;
+            padding: 20px;
+            color: var(--gray-color);
+            font-size: 0.9rem;
+            border-top: 1px solid #eee;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                flex-direction: column;
+            }
+
+            .panel {
+                width: 100%;
+            }
+
+            .btn-group {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 模型服务WebSocket测试平台</h1>
+            <p>实时监控和测试模型服务进程</p>
+        </header>
+
+        <div class="main-content">
+            <div class="panel">
+                <h2>🔌 连接管理</h2>
+                <div class="form-group">
+                    <label for="clientId">客户端ID</label>
+                    <input type="text" id="clientId" value="test_client_1" placeholder="输入客户端ID">
+                </div>
+
+                <div class="form-group">
+                    <label>连接状态:
+                        <span id="connectionStatus">
+                            <span class="status-indicator status-disconnected"></span>
+                            未连接
+                        </span>
+                    </label>
+                </div>
+
+                <div class="btn-group">
+                    <button id="connectBtn" class="btn-primary" onclick="connectWebSocket()">连接</button>
+                    <button id="disconnectBtn" class="btn-danger" onclick="disconnectWebSocket()" disabled>断开</button>
+                    <button class="btn-warning" onclick="reconnectWebSocket()">重连</button>
+                </div>
+
+                <h3>📊 实时统计</h3>
+                <div class="stats">
+                    <div class="stat-item">
+                        <div class="stat-value" id="messageCount">0</div>
+                        <div class="stat-label">消息数</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="errorCount">0</div>
+                        <div class="stat-label">错误数</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="uptime">0s</div>
+                        <div class="stat-label">运行时间</div>
+                    </div>
+                </div>
+
+                <h3>🎛️ 测试功能</h3>
+                <div class="tabs">
+                    <div class="tab active" onclick="switchTab('selfplay')">自我对弈</div>
+                    <div class="tab" onclick="switchTab('training')">模型训练</div>
+                    <div class="tab" onclick="switchTab('evaluation')">模型评估</div>
+
+                    <div class="tab" onclick="switchTab('simulation')">模拟测试</div>
+                </div>
+
+                <div id="selfplay" class="tab-content active">
+                    <div class="form-group">
+                        <label for="workers">工作线程数</label>
+                        <input type="number" id="workers" value="1" min="1" max="16">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="useGpu" checked> 使用GPU
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label for="gameCount">对弈局数</label>
+                        <input type="number" id="gameCount" value="1" min="1" max="1000">
+                    </div>
+                    <button class="btn-success" onclick="testSelfPlay()">启动自我对弈</button>
+                </div>
+
+                <div id="training" class="tab-content">
+                    <div class="form-group">
+                        <label for="epochs">训练轮数</label>
+                        <input type="number" id="epochs" value="1" min="1" max="100">
+                    </div>
+                    <div class="form-group">
+                        <label for="batchSize">批次大小</label>
+                        <input type="number" id="batchSize" value="32" min="1" max="1024">
+                    </div>
+                    <div class="form-group">
+                        <label for="initModel">初始模型路径 (可选)</label>
+                        <input type="text" id="initModel" placeholder="留空使用默认模型">
+                    </div>
+                    <button class="btn-success" onclick="testTraining()">启动训练</button>
+                </div>
+
+                <div id="evaluation" class="tab-content">
+                    <div class="form-group">
+                        <label for="evalModel">评估模型路径</label>
+                        <input type="text" id="evalModel" placeholder="输入模型路径">
+                    </div>
+                    <div class="form-group">
+                        <label for="opponentModel">对手模型路径</label>
+                        <input type="text" id="opponentModel" placeholder="输入对手模型路径">
+                    </div>
+                    <div class="form-group">
+                        <label for="evalGames">对弈局数</label>
+                        <input type="number" id="evalGames" value="10" min="1" max="1000">
+                    </div>
+                    <button class="btn-success" onclick="testEvaluation()">启动评估</button>
+                </div>
+
+                <div id="simulation" class="tab-content">
+                    <h3>♟️ 模拟棋子移动</h3>
+                    <div class="form-group">
+                        <label for="simPlayer">玩家</label>
+                        <select id="simPlayer">
+                            <option value="human">人类</option>
+                            <option value="robot">机器人</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="simMoveUCI">UCI格式移动 (例如: "b0c2")</label>
+                        <input type="text" id="simMoveUCI" value="b0c2" placeholder="输入UCI格式移动">
+                    </div>
+                    <div class="form-group">
+                        <label for="simChineseNotation">中文记谱法 (例如: "炮二平五")</label>
+                        <input type="text" id="simChineseNotation" value="炮二平五" placeholder="输入中文记谱法">
+                    </div>
+                    <button class="btn-info" onclick="simulateMove()">发送移动信息</button>
+
+                    <h3>🔧 模拟错误信息</h3>
+                    <div class="form-group">
+                        <label for="simErrorMessage">错误信息</label>
+                        <textarea id="simErrorMessage" rows="3" placeholder="输入错误信息"></textarea>
+                    </div>
+                    <button class="btn-danger" onclick="simulateError()">发送错误信息</button>
+
+                    <h3>📊 模拟棋子偏移</h3>
+                    <div class="form-group">
+                        <label for="simDevRow">行号 (0-9)</label>
+                        <input type="number" id="simDevRow" min="0" max="9" value="5">
+                    </div>
+                    <div class="form-group">
+                        <label for="simDevCol">列号 (0-8)</label>
+                        <input type="number" id="simDevCol" min="0" max="8" value="4">
+                    </div>
+                    <div class="form-group">
+                        <label for="simDevX">X方向偏移 (mm)</label>
+                        <input type="number" id="simDevX" step="0.1" value="5.2">
+                    </div>
+                    <div class="form-group">
+                        <label for="simDevY">Y方向偏移 (mm)</label>
+                        <input type="number" id="simDevY" step="0.1" value="3.7">
+                    </div>
+                    <button class="btn-warning" onclick="simulateDeviation()">发送偏移信息</button>
+
+                    <h3>🖼️ 模拟棋盘识别结果</h3>
+                    <button class="btn-info" onclick="simulateBoardRecognition()">发送棋盘识别结果</button>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>📜 消息日志</h2>
+                <div class="filter-controls">
+                    <button class="filter-btn active-filter" onclick="filterLogs('all')">全部</button>
+                    <button class="filter-btn" onclick="filterLogs('info')">信息</button>
+                    <button class="filter-btn" onclick="filterLogs('success')">成功</button>
+                    <button class="filter-btn" onclick="filterLogs('error')">错误</button>
+                    <button class="filter-btn" onclick="filterLogs('process')">进程</button>
+                </div>
+                <div class="log-container">
+                    <div class="log-header">
+                        <span>实时日志输出</span>
+                        <button class="btn-danger" onclick="clearLog()" style="padding: 2px 8px; font-size: 12px;">清空</button>
+                    </div>
+                    <div id="log" class="log-content"></div>
+                </div>
+                <div class="btn-group" style="margin-top: 15px;">
+                    <button class="btn-info" onclick="exportLogs()">导出日志</button>
+                    <button class="btn-warning" onclick="toggleAutoScroll()">
+                        <span id="autoScrollText">自动滚动: 开启</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>模型服务WebSocket测试平台 © 2025 | 实时监控和测试AI模型服务</p>
+        </footer>
+    </div>
+
+    <script>
+        // 全局变量
+        let ws = null;
+        let clientId = document.getElementById('clientId').value;
+        let messageCount = 0;
+        let errorCount = 0;
+        let startTime = null;
+        let uptimeInterval = null;
+        let autoScroll = true;
+        let currentFilter = 'all';
+        let logEntries = [];
+
+        // DOM元素引用
+        const elements = {
+            clientId: document.getElementById('clientId'),
+            connectBtn: document.getElementById('connectBtn'),
+            disconnectBtn: document.getElementById('disconnectBtn'),
+            connectionStatus: document.getElementById('connectionStatus'),
+            log: document.getElementById('log'),
+            messageCount: document.getElementById('messageCount'),
+            errorCount: document.getElementById('errorCount'),
+            uptime: document.getElementById('uptime')
+        };
+
+        // 更新连接状态显示
+        function updateConnectionStatus(status, text) {
+            const statusMap = {
+                'connected': 'status-connected',
+                'disconnected': 'status-disconnected',
+                'connecting': 'status-connecting'
+            };
+
+            elements.connectionStatus.innerHTML = `
+                <span class="status-indicator ${statusMap[status] || 'status-disconnected'}"></span>
+                ${text}
+            `;
+        }
+
+        // 添加日志条目
+        function addLog(message, type = 'info') {
+            const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+            const entry = {
+                timestamp,
+                message,
+                type,
+                id: logEntries.length
+            };
+
+            logEntries.push(entry);
+
+            // 更新统计
+            messageCount++;
+            elements.messageCount.textContent = messageCount;
+
+            if (type === 'error' || type === 'process_error') {
+                errorCount++;
+                elements.errorCount.textContent = errorCount;
+            }
+
+            // 应用过滤器
+            if (shouldShowLog(entry)) {
+                renderLogEntry(entry);
+            }
+        }
+
+        // 判断是否应该显示日志条目
+        function shouldShowLog(entry) {
+            if (currentFilter === 'all') return true;
+            if (currentFilter === 'info' && entry.type === 'info') return true;
+            if (currentFilter === 'success' && entry.type === 'success') return true;
+            if (currentFilter === 'error' && (entry.type === 'error' || entry.type === 'process_error')) return true;
+            if (currentFilter === 'process' && entry.type.startsWith('process')) return true;
+            return false;
+        }
+
+        // 渲染单个日志条目
+        function renderLogEntry(entry) {
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry log-${entry.type}`;
+
+            // 特殊处理进程错误
+            if (entry.type === 'process_error') {
+                logEntry.className = 'process-error';
+                logEntry.innerHTML = `
+                    <div><strong>⚠️ 进程错误 [${entry.message.process_type}]</strong></div>
+                    <div>错误信息: ${entry.message.error_message}</div>
+                    <div>时间: ${entry.timestamp}</div>
+                `;
+            } else {
+                logEntry.innerHTML = `<span class="log-timestamp">${entry.timestamp}</span>${entry.message}`;
+            }
+
+            elements.log.appendChild(logEntry);
+
+            // 自动滚动
+            if (autoScroll) {
+                elements.log.scrollTop = elements.log.scrollHeight;
+            }
+        }
+
+        // 过滤日志
+        function filterLogs(filter) {
+            currentFilter = filter;
+
+            // 更新按钮状态
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('active-filter');
+            });
+
+            // 通过事件对象获取点击的按钮
+            if (event && event.target) {
+                event.target.classList.add('active-filter');
+            }
+
+            // 重新渲染日志
+            elements.log.innerHTML = '';
+            logEntries.forEach(entry => {
+                if (shouldShowLog(entry)) {
+                    renderLogEntry(entry);
+                }
+            });
+        }
+
+        // 连接WebSocket
+        function connectWebSocket() {
+            clientId = elements.clientId.value.trim();
+            if (!clientId) {
+                alert('请输入客户端ID');
+                return;
+            }
+
+            try {
+                // 关闭现有连接
+                if (ws) {
+                    ws.close();
+                }
+
+                updateConnectionStatus('connecting', '连接中...');
+                elements.connectBtn.disabled = true;
+
+                // 创建新的WebSocket连接
+                const wsUrl = `ws://localhost:6018/ws/${clientId}`;
+                addLog(`正在连接到: ${wsUrl}`, 'info');
+
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = function(event) {
+                    updateConnectionStatus('connected', '已连接');
+                    elements.disconnectBtn.disabled = false;
+                    elements.connectBtn.disabled = false;
+                    addLog('WebSocket连接已建立', 'success');
+
+                    // 开始计时
+                    startTime = new Date();
+                    if (uptimeInterval) clearInterval(uptimeInterval);
+                    uptimeInterval = setInterval(updateUptime, 1000);
+                };
+
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        addLog(`收到消息: ${JSON.stringify(data)}`, 'info');
+
+                        // 特别处理错误消息
+                        if (data.type === 'process_error') {
+                            addLog(data, 'process_error');
+                        }
+                    } catch (e) {
+                        addLog(`收到非JSON消息: ${event.data}`, 'info');
+                    }
+                };
+
+                ws.onclose = function(event) {
+                    updateConnectionStatus('disconnected', '已断开');
+                    elements.disconnectBtn.disabled = true;
+                    elements.connectBtn.disabled = false;
+                    addLog('WebSocket连接已断开', 'warning');
+
+                    if (uptimeInterval) {
+                        clearInterval(uptimeInterval);
+                        uptimeInterval = null;
+                    }
+                };
+
+                ws.onerror = function(error) {
+                    addLog(`WebSocket错误: ${error.message}`, 'error');
+                };
+
+            } catch (e) {
+                updateConnectionStatus('disconnected', '连接失败');
+                elements.connectBtn.disabled = false;
+                addLog(`连接失败: ${e.message}`, 'error');
+            }
+        }
+
+        // 断开WebSocket连接
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        // 重连WebSocket
+        function reconnectWebSocket() {
+            disconnectWebSocket();
+            setTimeout(connectWebSocket, 1000);
+        }
+
+        // 更新运行时间
+        function updateUptime() {
+            if (startTime) {
+                const elapsed = Math.floor((new Date() - startTime) / 1000);
+                const seconds = elapsed % 60;
+                const minutes = Math.floor(elapsed / 60) % 60;
+                const hours = Math.floor(elapsed / 3600);
+
+                let uptimeText = '';
+                if (hours > 0) {
+                    uptimeText = `${hours}h ${minutes}m ${seconds}s`;
+                } else if (minutes > 0) {
+                    uptimeText = `${minutes}m ${seconds}s`;
+                } else {
+                    uptimeText = `${seconds}s`;
+                }
+
+                elements.uptime.textContent = uptimeText;
+            }
+        }
+
+        // 启动自我对弈测试
+        function testSelfPlay() {
+            if (!ws) {
+                addLog('请先连接WebSocket', 'error');
+                return;
+            }
+
+            const payload = {
+                workers: parseInt(document.getElementById('workers').value) || 1,
+                use_gpu: document.getElementById('useGpu').checked,
+                collect_mode: "multi_thread",
+                temp: 1.0,
+                cpuct: 5.0,
+                game_count: parseInt(document.getElementById('gameCount').value) || 1
+            };
+
+            fetch('http://localhost:6018/process/selfplay/start', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                addLog(`启动自我对弈成功: ${JSON.stringify(data)}`, 'success');
+            })
+            .catch(error => {
+                addLog(`启动自我对弈失败: ${error.message}`, 'error');
+                console.error('详细错误信息:', error);
+            });
+        }
+
+        // 启动训练测试
+        function testTraining() {
+            if (!ws) {
+                addLog('请先连接WebSocket', 'error');
+                return;
+            }
+
+            const payload = {
+                init_model: document.getElementById('initModel').value || null,
+                data_path: null,
+                epochs: parseInt(document.getElementById('epochs').value) || 1,
+                batch_size: parseInt(document.getElementById('batchSize').value) || 32
+            };
+
+            fetch('http://localhost:6018/process/training/start', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                addLog(`启动训练成功: ${JSON.stringify(data)}`, 'success');
+            })
+            .catch(error => {
+                addLog(`启动训练失败: ${error.message}`, 'error');
+                console.error('详细错误信息:', error);
+            });
+        }
+
+        // 启动评估测试
+        function testEvaluation() {
+            if (!ws) {
+                addLog('请先连接WebSocket', 'error');
+                return;
+            }
+
+            const payload = {
+                model_path: document.getElementById('evalModel').value,
+                opponent_model: document.getElementById('opponentModel').value,
+                game_count: parseInt(document.getElementById('evalGames').value) || 10
+            };
+
+            if (!payload.model_path) {
+                addLog('请输入评估模型路径', 'error');
+                return;
+            }
+
+            fetch('http://localhost:6018/process/evaluation/start', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                addLog(`启动评估成功: ${JSON.stringify(data)}`, 'success');
+            })
+            .catch(error => {
+                addLog(`启动评估失败: ${error.message}`, 'error');
+                console.error('详细错误信息:', error);
+            });
+        }
+
+        // 模拟发送棋子移动信息
+        function simulateMove() {
+            if (!ws) {
+                addLog('请先连接WebSocket', 'error');
+                return;
+            }
+
+            const player = document.getElementById('simPlayer').value;
+            const moveUCI = document.getElementById('simMoveUCI').value.trim();
+            const chineseNotation = document.getElementById('simChineseNotation').value.trim();
+
+            if (!moveUCI || !chineseNotation) {
+                addLog('请填写完整的移动信息', 'error');
+                return;
+            }
+
+            const moveData = {
+                "type": "info",
+                "scene": "chess/move",
+                "data": {
+                    "player": player,
+                    "uci": moveUCI,
+                    "chinese": chineseNotation
+                },
+                "timestamp": new Date().toISOString(),
+                "message": `${player}走棋: ${chineseNotation} (${moveUCI})`
+            };
+
+            ws.send(JSON.stringify(moveData));
+            addLog(`模拟发送移动信息: ${JSON.stringify(moveData)}`, 'success');
+        }
+
+        // 模拟发送错误信息
+        function simulateError() {
+            if (!ws) {
+                addLog('请先连接WebSocket', 'error');
+                return;
+            }
+
+            const errorMessage = document.getElementById('simErrorMessage').value.trim();
+
+            if (!errorMessage) {
+                addLog('请填写错误信息', 'error');
+                return;
+            }
+
+            const errorData = {
+                "type": "error",
+                "scene": "chess/error",
+                "data": {},
+                "timestamp": new Date().toISOString(),
+                "message": errorMessage
+            };
+
+            ws.send(JSON.stringify(errorData));
+            addLog(`模拟发送错误信息: ${JSON.stringify(errorData)}`, 'success');
+        }
+
+        // 模拟发送棋子偏移信息
+        function simulateDeviation() {
+            if (!ws) {
+                addLog('请先连接WebSocket', 'error');
+                return;
+            }
+
+            const row = parseInt(document.getElementById('simDevRow').value);
+            const col = parseInt(document.getElementById('simDevCol').value);
+            const deviationX = parseFloat(document.getElementById('simDevX').value);
+            const deviationY = parseFloat(document.getElementById('simDevY').value);
+
+            const distance = Math.sqrt(deviationX * deviationX + deviationY * deviationY);
+
+            const deviationData = {
+                "type": "error",
+                "scene": "chess/deviation",
+                "data": {
+                    "position": {"row": row, "col": col},
+                    "deviation": {
+                        "x": deviationX,
+                        "y": deviationY,
+                        "distance": distance
+                    },
+                },
+                "timestamp": new Date().toISOString(),
+                "message": `第${row + 1}行,第${col + 1}列棋子偏离标准位置${distance.toFixed(2)}mm`
+            };
+
+            ws.send(JSON.stringify(deviationData));
+            addLog(`模拟发送偏移信息: ${JSON.stringify(deviationData)}`, 'success');
+        }
+
+        // 模拟发送棋盘识别结果
+        function simulateBoardRecognition() {
+            if (!ws) {
+                addLog('请先连接WebSocket', 'error');
+                return;
+            }
+
+            const recognitionData = {
+                "type": "info",
+                "scene": "chess/recognition",
+                "data": {
+                    "image_data": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAEBAQEBAQECAQECAQEBAQICAwICAgQDAwIDBQQFBQUEBQcFBgYGBgUFBgcICAkIBwcKCgkKCwsMDAwMCgwODQ0NDAz/2wBDAQEBAQEBAQIBAQICAwICAwQDAwMDBAQEBAQEAwUFBQUFBQUFBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgb/wAARCAABAAEDAREAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k="
+                },
+                "timestamp": new Date().toISOString(),
+                "message": "棋盘识别结果已更新"
+            };
+
+            ws.send(JSON.stringify(recognitionData));
+            addLog(`模拟发送棋盘识别结果: ${JSON.stringify(recognitionData)}`, 'success');
+        }
+
+        // 清空日志
+        function clearLog() {
+            elements.log.innerHTML = '';
+            logEntries = [];
+            messageCount = 0;
+            errorCount = 0;
+            elements.messageCount.textContent = '0';
+            elements.errorCount.textContent = '0';
+        }
+
+        // 导出日志
+        function exportLogs() {
+            const logText = logEntries.map(entry =>
+                `[${entry.timestamp}] ${entry.message}`
+            ).join('\n');
+
+            const blob = new Blob([logText], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `websocket_logs_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // 切换自动滚动
+        function toggleAutoScroll() {
+            autoScroll = !autoScroll;
+            document.getElementById('autoScrollText').textContent =
+                `自动滚动: ${autoScroll ? '开启' : '关闭'}`;
+        }
+
+        // 标签页切换
+        function switchTab(tabName) {
+            // 隐藏所有标签内容
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // 移除所有标签的活动状态
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // 显示选中的标签内容
+            document.getElementById(tabName).classList.add('active');
+
+            // 设置选中标签为活动状态
+            if (event && event.target) {
+                event.target.classList.add('active');
+            }
+        }
+
+        // 页面加载完成后的初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            // 可以在这里添加自动连接逻辑
+            // connectWebSocket();
+        });
+    </script>
+</body>
+</html>

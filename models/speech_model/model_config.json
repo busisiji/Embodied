@@ -1,0 +1,6 @@
+{
+  "sample_rate": 16000,
+  "feature_type": "mfcc",
+  "latency": 200,
+  "vocabulary_file": "words.txt"
+}

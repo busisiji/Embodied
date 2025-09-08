@@ -1,0 +1,8 @@
+[20:49:55][PID=8000] 子进程中止
+[ERROR][PID=8001] 异常退出: 'int' object is not iterable
+[ERROR][PID=8000] 异常退出: 'int' object is not iterable
+[21:36:22][PID=8000] 子进程中止
+[21:36:27][PID=8001] 子进程中止
+[22:20:38][PID=8001] 子进程中止
+[22:20:38][PID=8000] 子进程中止
+[ERROR][PID=8000] 异常退出: 'CollectPipeline' object has no attribute 'mirror_data'

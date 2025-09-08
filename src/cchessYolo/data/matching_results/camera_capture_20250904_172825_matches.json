@@ -1,0 +1,113 @@
+{
+  "source_image": "E:\\现有文件\\工作\\工程\\新人工智能实训室\\代码\\Embodied\\src\\cchessYolo\\data/images\\camera_capture_20250904_172825.png",
+  "matches": {
+    "blue_circle": [
+      {
+        "x": 329,
+        "y": 165,
+        "width": 36,
+        "height": 36,
+        "confidence": 0.9434259251585353,
+        "template": "blue_circle_1_bright_high.jpg"
+      },
+      {
+        "x": 330,
+        "y": 206,
+        "width": 36,
+        "height": 36,
+        "confidence": 0.9357378586768741,
+        "template": "blue_circle_1_bright_high.jpg"
+      },
+      {
+        "x": 423,
+        "y": 258,
+        "width": 36,
+        "height": 36,
+        "confidence": 0.9216148122045706,
+        "template": "blue_circle_1_bright_high.jpg"
+      },
+      {
+        "x": 324,
+        "y": 269,
+        "width": 36,
+        "height": 36,
+        "confidence": 0.8933033921249952,
+        "template": "blue_circle_1_bright_high.jpg"
+      },
+      {
+        "x": 422,
+        "y": 294,
+        "width": 36,
+        "height": 36,
+        "confidence": 0.8932020025782833,
+        "template": "blue_circle_1_bright_high.jpg"
+      },
+      {
+        "x": 352,
+        "y": 246,
+        "width": 36,
+        "height": 36,
+        "confidence": 0.8736533092277907,
+        "template": "blue_circle_1_bright_high.jpg"
+      }
+    ],
+    "green_rectangle": [
+      {
+        "x": 271,
+        "y": 263,
+        "width": 29,
+        "height": 27,
+        "confidence": 0.8811392726056969,
+        "template": "green_rectangle_0_rot_90.jpg"
+      },
+      {
+        "x": 257,
+        "y": 68,
+        "width": 27,
+        "height": 29,
+        "confidence": 0.8468614886465958,
+        "template": "green_rectangle_0_contrast_low.jpg"
+      },
+      {
+        "x": 239,
+        "y": 280,
+        "width": 29,
+        "height": 27,
+        "confidence": 0.8394028485407692,
+        "template": "green_rectangle_0_rot_90.jpg"
+      },
+      {
+        "x": 455,
+        "y": 104,
+        "width": 29,
+        "height": 27,
+        "confidence": 0.82874891116466,
+        "template": "green_rectangle_0_rot_90.jpg"
+      },
+      {
+        "x": 454,
+        "y": 133,
+        "width": 29,
+        "height": 27,
+        "confidence": 0.8123637307414221,
+        "template": "green_rectangle_0_rot_90.jpg"
+      },
+      {
+        "x": 548,
+        "y": 257,
+        "width": 29,
+        "height": 27,
+        "confidence": 0.8080601074795124,
+        "template": "green_rectangle_0_rot_90.jpg"
+      },
+      {
+        "x": 422,
+        "y": 292,
+        "width": 27,
+        "height": 29,
+        "confidence": 0.8013132163563803,
+        "template": "green_rectangle_0_contrast_low.jpg"
+      }
+    ]
+  }
+}

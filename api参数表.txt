@@ -1,0 +1,3 @@
+username 用户名
+password 用户密码
+permission 用户权限

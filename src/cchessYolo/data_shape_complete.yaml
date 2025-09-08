@@ -1,0 +1,11 @@
+path: E:\现有文件\工作\工程\新人工智能实训室\代码\Embodied\src\cchessYolo\data/images
+train: train
+val: val
+test: test
+
+# Classes
+names:
+  0: red_triangle
+  1: blue_circle
+  2: yellow_pentagon
+  3: green_rectangle

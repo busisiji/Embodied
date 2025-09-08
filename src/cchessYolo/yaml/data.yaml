@@ -1,0 +1,12 @@
+# data.yaml
+path: data
+train: images/train
+val: images/val
+
+# 类别数 - 红黑双方各7种棋子
+nc: 14
+
+# 类别名称 - 分别标注红方和黑方棋子
+names: ["A","B", "C", "K", "N", "P", "R", "a", "b", "c", "k", "n", "p", "r"]
+
+

@@ -1,0 +1,11 @@
+# yaml/data_shape.yaml
+path: ./dataset
+train: train/images
+val: val/images
+
+# Classes
+names:
+  0: red_triangle
+  1: blue_circle
+  2: yellow_pentagon
+  3: green_rectangle
