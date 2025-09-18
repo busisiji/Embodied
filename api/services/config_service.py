@@ -79,7 +79,7 @@ def update_config_field(table_name: str, field_name: str, **kwargs):
     if not field:
         error_msg = f"字段 '{field_name}' 在表 '{table_name}' 中不存在"
         logger.warning(error_msg)
-        send_error_notification_sync("config_service", None, error_msg)
+        send_error_notification_sync("config_service", error_msg)
         raise ResourceNotFoundException(f"Field '{field_name}' in table '{table_name}'")
 
     for key, value in kwargs.items():
@@ -105,7 +105,7 @@ def update_config_field_comprehensive(table_name: str, field_name: str,
     if not field:
         error_msg = f"字段 '{field_name}' 在表 '{table_name}' 中不存在"
         logger.warning(error_msg)
-        send_error_notification_sync("config_service", None, error_msg)
+        send_error_notification_sync("config_service", error_msg)
         raise ResourceNotFoundException(f"Field '{field_name}' not found in table '{table_name}'")
 
     # 处理字段名更新
@@ -119,7 +119,7 @@ def update_config_field_comprehensive(table_name: str, field_name: str,
         if existing:
             error_msg = f"字段 '{new_field_name}' 已存在于表 '{table_name}' 中"
             logger.warning(error_msg)
-            send_error_notification_sync("config_service", None, error_msg)
+            send_error_notification_sync("config_service", error_msg)
             raise InvalidInputException(f"Field '{new_field_name}' already exists in table '{table_name}'")
 
         # 更新字段定义中的字段名
@@ -158,14 +158,14 @@ def set_config_data(table_name: str, config_key: str, config_value, description:
     if not field:
         error_msg = f"字段 '{config_key}' 未在表 '{table_name}' 中定义"
         logger.warning(error_msg)
-        send_error_notification_sync("config_service", None, error_msg)
+        send_error_notification_sync("config_service", error_msg)
         raise InvalidInputException(f"Field '{config_key}' is not defined in table '{table_name}'")
 
     # 验证数据类型是否匹配
     if not _validate_data_type(config_value, field.field_type):
         error_msg = f"值类型与字段 '{config_key}' 的类型 '{field.field_type}' 不匹配"
         logger.warning(error_msg)
-        send_error_notification_sync("config_service", None, error_msg)
+        send_error_notification_sync("config_service", error_msg)
         raise InvalidInputException(
             f"Value type does not match field type '{field.field_type}' for field '{config_key}'")
 
@@ -244,7 +244,7 @@ def add_config_field(table_name: str, field_name: str, field_type: str,
     if existing:
         error_msg = f"字段 '{field_name}' 已存在于表 '{table_name}' 中"
         logger.warning(error_msg)
-        send_error_notification_sync("config_service", None, error_msg)
+        send_error_notification_sync("config_service", error_msg)
         raise InvalidInputException(f"Field '{field_name}' already exists in table '{table_name}'")
 
     field = ConfigField.create(
@@ -286,7 +286,7 @@ def delete_config_field(table_name: str, field_name: str):
     if not field:
         error_msg = f"字段 '{field_name}' 在表 '{table_name}' 中不存在"
         logger.warning(error_msg)
-        send_error_notification_sync("config_service", None, error_msg)
+        send_error_notification_sync("config_service", error_msg)
         raise ResourceNotFoundException(f"Field '{field_name}' in table '{table_name}'")
 
     # 删除相关的配置数据
@@ -336,7 +336,7 @@ def delete_config_data(table_name: str, config_key: str):
     if not data:
         error_msg = f"配置数据 '{config_key}' 在表 '{table_name}' 中不存在"
         logger.warning(error_msg)
-        send_error_notification_sync("config_service", None, error_msg)
+        send_error_notification_sync("config_service", error_msg)
         raise ResourceNotFoundException(f"Config data '{config_key}' in table '{table_name}'")
 
     data.delete_instance()

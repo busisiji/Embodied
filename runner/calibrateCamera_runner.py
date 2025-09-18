@@ -14,15 +14,14 @@ from utils.corrected import correct_chessboard_to_square
 from parameters import CHESS_POINTS_R, WORLD_POINTS_R
 from src.cchessYolo.chess_detection_trainer import ChessPieceDetectorSeparate
 from src.cchessYolo.detect_chess_box import select_corner_circles, order_points, calculate_box_corners
-
+dir = os.path.dirname(os.path.abspath(__file__))
 # ================== 配置参数 ==================
 SQUARE_SIZE_MM = 30.0          # 棋盘格大小（单位：毫米）
 CHESSBOARD_SHAPE = (5, 7)      # 内部角点数量（对应 4x4 棋盘格）
 MAX_IMAGES = 100                # 最大采集图像数量
 AUTO_CAPTURE_INTERVAL = 100   # 自动拍照间隔（毫秒）默认 10s
-SAVE_DIR = "../src/Chinese_Chess_Recognition/calibration_images"
-OUTPUT_DIR = "../src/Chinese_Chess_Recognition/calibration_output"
-CORNERS_DIR = "../src/Chinese_Chess_Recognition/corners_images"
+SAVE_DIR = os.path.join(dir, "calibration/images")
+OUTPUT_DIR = os.path.join(dir, "calibration/output")
 WIDTH = 1280
 HEIGHT = 720
 FPS = 6
@@ -32,7 +31,7 @@ class CalibrationApp:
         self.root = root
         self.root.title("RealSense 自动拍照 + 标定工具")
 
-        self.result_dir = "../src/Chinese_Chess_Recognition/validation_results"
+        self.result_dir = "validation_results"
 
         # 初始化相机管道
         self.pipeline = None
@@ -52,7 +51,7 @@ class CalibrationApp:
         self.M = None
         self.chess_box_points = None
 
-        self.detector = ChessPieceDetectorSeparate('../src/cchessYolo/runs/detect/chess_piece_detection_separate5/weights/best.pt'
+        self.detector = ChessPieceDetectorSeparate(os.path.join(dir,'../src/cchessYolo/runs/detect/chess_piece_detection_separate5/weights/best.onnx')
         )
 
     def init(self):
@@ -241,9 +240,9 @@ class CalibrationApp:
             return
 
         # 使用新添加的函数检测物体和高度信息
-        objects_info = self.detector.detect_objects_with_height(
+        objects_info, _ = self.detector.detect_objects_with_height(
             self.original_frame,
-            self.depth_frame,
+            None,
             conf_threshold=0.5,
             iou_threshold=0.4
         )
@@ -316,7 +315,7 @@ class CalibrationApp:
         objpoints = []  # 3D点
         imgpoints = []  # 2D图像点
 
-        images = [os.path.join(CORNERS_DIR, f) for f in os.listdir(CORNERS_DIR) if f.endswith(".jpg") or f.endswith(".png")]
+        images = [os.path.join(SAVE_DIR, f) for f in os.listdir(SAVE_DIR) if f.endswith(".jpg") or f.endswith(".png")]
 
         for fname in images:
             img = cv2.imread(fname)
@@ -442,9 +441,9 @@ class CalibrationApp:
             dp=1,
             minDist=50,  # 圆心之间的最小距离
             param1=50,   # Canny边缘检测的高阈值
-            param2=30,   # 累积阈值，越小检测到的圆越多
+            param2=50,   # 累积阈值，越小检测到的圆越多
             minRadius=10,  # 最小半径
-            maxRadius=50   # 最大半径
+            maxRadius=40   # 最大半径
         )
 
         if circles is None:

@@ -2,11 +2,11 @@ import numpy as np
 
 POINT_HOME = [-123,-349.7,395.9, -179,0.2,-179]  # 初始点
 POINT_TRANSIT = [-24.3, -434.17, 395.9, -179, 0, -179] # 中转点
-POINT_DOWN = [193, 200.56] # 下点位 吸 放
+POINT_DOWN = [190, 200.56] # 下点位 吸 放
 POINT_UP = 395.9 # 上点位
 PIECE_SIZE = 40 # 棋子大小mm
-CHESSBOX_DEVX = + 31 # 棋盒x偏差
-CHESSBOX_DEVY = -31 # 棋盒y偏差
+CHESSBOX_DEVX = + 0 # 棋盒x偏差
+CHESSBOX_DEVY = + 0  # 棋盒y偏差
 
 # 拍照点
 RED_CAMERA = [-24.3, -434.17, 395.9, -179, 0, -179]# 红方拍照点
@@ -22,7 +22,7 @@ RCV_CAMERA = [-350, -320, 395.9, -179, 0, -179] # 收子区域拍照点
 SAC_CAMERA = [333.5, -360.65, 300.9, -179, 0, -179] # 弃子区域拍照点
 # 吸棋高度
 # POINT_RCV_DOWN  = [194,207.7]
-POINT_RCV_DOWN  = [189,205,260] # 收子区域吸棋高度 下层，上层
+POINT_RCV_DOWN  = [189,205,240] # 收子区域吸棋高度 下层，上层
 POINT_SAC_DOWN = [235,250] # 弃子区域吸棋高度 下层，上层
 # 透视矫正
 SRC_RCV_POINTS = np.float32([

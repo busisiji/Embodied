@@ -1,4 +1,3 @@
-# calibrationManager.py
 import cv2
 import numpy as np
 
@@ -8,6 +7,10 @@ from parameters import (
     RCV_CAMERA, RED_CAMERA, SAC_CAMERA, BLACK_CAMERA,
     CHESS_POINTS_RCV_H, BOARD_SAC
 )
+from utils.calibrationTPS import world_to_pixel_tps, TPS_R_WORLD_TO_PIXEL, pixel_to_world_tps, TPS_R_PIXEL_TO_WORLD, \
+    TPS_B_PIXEL_TO_WORLD, TPS_B_WORLD_TO_PIXEL, TPS_RCV_PIXEL_TO_WORLD
+
+
 def apply_perspective_correction(m, x, y):
     """
     应用透视矫正到坐标点
@@ -51,48 +54,69 @@ def calculate_perspective_transform_matrices(world_points, chess_points):
 FORWARD_MATRIX_R, INVERSE_MATRIX_R = calculate_perspective_transform_matrices(WORLD_POINTS_R, CHESS_POINTS_R)
 FORWARD_MATRIX_B, INVERSE_MATRIX_B = calculate_perspective_transform_matrices(WORLD_POINTS_B, CHESS_POINTS_B)
 
-def world_to_pixel(x, y, matrix=FORWARD_MATRIX_R):
-    """
-    将世界坐标转换为像素坐标
 
-    Args:
-        x, y: 世界坐标
-        matrix: 变换矩阵
-
-    Returns:
-        tuple: (pixel_x, pixel_y) 像素坐标
-    """
-    # 构造齐次坐标
-    point = np.array([[[x, y]]], dtype=np.float32)
-
-    # 应用透视变换
-    transformed_point = cv2.perspectiveTransform(point, matrix)
-
-    # 返回像素坐标
-    return (int(transformed_point[0][0][0]), int(transformed_point[0][0][1]))
-
-def pixel_to_world(u, v, matrix=None):
+def pixel_to_world(u, v, matrix=None, use_tps=True, camera_type="RED_CAMERA"):
     """
     将像素坐标转换为世界坐标
 
     Args:
         u, v: 像素坐标
         matrix: 逆变换矩阵
+        use_tps: 是否使用TPS变换
+        camera_type: 相机类型 ("RED" 或 "BLACK")
 
     Returns:
         tuple: (world_x, world_y) 世界坐标
     """
-    if matrix is None:
-        matrix = INVERSE_MATRIX_R
+    if use_tps:
+        if camera_type == "RCV_CAMERA":
+            return pixel_to_world_tps(u, v, TPS_RCV_PIXEL_TO_WORLD)
+        elif camera_type != "BLACK_CAMERA":
+            return pixel_to_world_tps(u, v, TPS_R_PIXEL_TO_WORLD)
+        else:  # BLACK
+            return pixel_to_world_tps(u, v, TPS_B_PIXEL_TO_WORLD)
+    else:
+        if matrix is None:
+            matrix = INVERSE_MATRIX_R
 
-    # 构造齐次坐标
-    point = np.array([[[u, v]]], dtype=np.float32)
+        # 构造齐次坐标
+        point = np.array([[[u, v]]], dtype=np.float32)
 
-    # 应用透视变换
-    transformed_point = cv2.perspectiveTransform(point, matrix)
+        # 应用透视变换
+        transformed_point = cv2.perspectiveTransform(point, matrix)
 
-    # 返回世界坐标
-    return round(float(transformed_point[0][0][0]), 2), round(float(transformed_point[0][0][1]), 2)
+        # 返回世界坐标
+        return round(float(transformed_point[0][0][0]), 2), round(float(transformed_point[0][0][1]), 2)
+
+
+def world_to_pixel(x, y, matrix=FORWARD_MATRIX_R, use_tps=True, camera_type="RED"):
+    """
+    将世界坐标转换为像素坐标
+
+    Args:
+        x, y: 世界坐标
+        matrix: 正向变换矩阵
+        use_tps: 是否使用TPS变换
+        camera_type: 相机类型 ("RED" 或 "BLACK")
+
+    Returns:
+        tuple: (pixel_u, pixel_v) 像素坐标
+    """
+    if use_tps:
+        if camera_type == "RED":
+            return world_to_pixel_tps(x, y, TPS_R_WORLD_TO_PIXEL)
+        else:  # BLACK
+            return world_to_pixel_tps(x, y, TPS_B_WORLD_TO_PIXEL)
+    else:
+        # 构造齐次坐标
+        point = np.array([[[x, y]]], dtype=np.float32)
+
+        # 应用透视变换
+        transformed_point = cv2.perspectiveTransform(point, matrix)
+
+        # 返回像素坐标
+        return (int(transformed_point[0][0][0]), int(transformed_point[0][0][1]))
+
 
 def pixel_to_grid(pixel_x, pixel_y, corner_points):
     """
@@ -269,10 +293,10 @@ def multi_camera_pixel_to_world(pixel_x, pixel_y, inverse_matrix, camera_type="R
         tuple: (world_x, world_y) 世界坐标
     """
     # RED_CAMERA像素坐标转换为世界坐标
-    world_x, world_y = pixel_to_world(pixel_x, pixel_y, inverse_matrix)
+    world_x, world_y = pixel_to_world(pixel_x, pixel_y, inverse_matrix, camera_type=camera_type)
 
     # 如果是RED_CAMERA或BLACK_CAMERA，直接返回
-    if camera_type in ["RED_CAMERA", "BLACK_CAMERA"]:
+    if camera_type in ["RED_CAMERA", "BLACK_CAMERA","RCV_CAMERA"]:
         return world_x, world_y
 
     # 计算其他相机与RED_CAMERA的坐标偏移

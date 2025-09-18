@@ -185,13 +185,13 @@ class ModelService:
         if not os.path.exists(user_data_path):
             error_msg = f"数据文件 {file_name} 不存在"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         if not user_data_path.endswith(".pkl"):
             error_msg = "文件格式不正确，只支持 .pkl 文件"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 获取文件详细信息
@@ -238,7 +238,7 @@ class ModelService:
         if not os.path.exists(user_model_path):
             error_msg = f"模型文件 {file_name} 不存在"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 获取文件详细信息
@@ -266,12 +266,12 @@ class ModelService:
             if not user:
                 error_msg = f"用户 {user_id} 不存在于数据库中"
                 logger.error(error_msg)
-                send_error_notification_sync("system", None, error_msg)
+                send_error_notification_sync("system",  error_msg)
                 raise Exception(error_msg)
         except Exception as e:
             error_msg = f"检查用户 {user_id} 存在性失败: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         synced_count = 0
@@ -287,7 +287,7 @@ class ModelService:
         if not os.path.exists(user_data_path):
             error_msg = f"用户 {user_id} 的数据目录不存在"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 获取数据库中已有的数据文件记录
@@ -322,7 +322,7 @@ class ModelService:
                 except Exception as e:
                     error_msg = f"从数据库删除文件记录失败 {db_file_path}: {str(e)}"
                     logger.error(error_msg)
-                    send_error_notification_sync("system", None, error_msg)
+                    send_error_notification_sync("system",  error_msg)
 
         # 添加本地存在但数据库中没有的文件记录
         for root, dirs, files in os.walk(user_data_path):
@@ -368,7 +368,7 @@ class ModelService:
                     except Exception as e:
                         error_msg = f"同步数据文件到数据库失败 {file_path}: {str(e)}"
                         logger.error(error_msg)
-                        send_error_notification_sync("system", None, error_msg)
+                        send_error_notification_sync("system",  error_msg)
 
         return {
             "status": "success",
@@ -394,12 +394,12 @@ class ModelService:
             if not user:
                 error_msg = f"用户 {user_id} 不存在于数据库中"
                 logger.error(error_msg)
-                send_error_notification_sync("system", None, error_msg)
+                send_error_notification_sync("system",  error_msg)
                 raise Exception(error_msg)
         except Exception as e:
             error_msg = f"检查用户 {user_id} 存在性失败: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         synced_count = 0
@@ -415,7 +415,7 @@ class ModelService:
         if not os.path.exists(user_model_path):
             error_msg = f"用户 {user_id} 的模型目录不存在"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 获取数据库中已有的模型文件记录
@@ -450,7 +450,7 @@ class ModelService:
                 except Exception as e:
                     error_msg = f"从数据库删除文件记录失败 {db_file_path}: {str(e)}"
                     logger.error(error_msg)
-                    send_error_notification_sync("system", None, error_msg)
+                    send_error_notification_sync("system",  error_msg)
 
         # 添加本地存在但数据库中没有的文件记录
         for root, dirs, files in os.walk(user_model_path):
@@ -494,7 +494,7 @@ class ModelService:
                     except Exception as e:
                         error_msg = f"同步模型文件到数据库失败 {file_path}: {str(e)}"
                         logger.error(error_msg)
-                        send_error_notification_sync("system", None, error_msg)
+                        send_error_notification_sync("system",  error_msg)
 
         return {
             "status": "success",
@@ -545,7 +545,7 @@ class ModelService:
             existing_user_ids = {user.user_id for user in existing_users}
         except Exception as e:
             logger.error(f"获取数据库用户列表失败: {str(e)}")
-            send_error_notification_sync("system", None, f"获取数据库用户列表失败: {str(e)}")
+            send_error_notification_sync("system",  f"获取数据库用户列表失败: {str(e)}")
             raise Exception(f"获取数据库用户列表失败: {str(e)}")
 
         # 过滤出数据库中存在的用户
@@ -571,7 +571,7 @@ class ModelService:
                     "error": str(e)
                 })
                 logger.error(f"同步用户 {user_id} 文件失败: {str(e)}")
-                send_error_notification_sync("system", None, f"同步用户 {user_id} 文件失败: {str(e)}")
+                send_error_notification_sync("system",  f"同步用户 {user_id} 文件失败: {str(e)}")
 
         return {
             "processed_count": len(valid_user_ids),
@@ -594,7 +594,7 @@ class ModelService:
                 except Exception as e:
                     error_msg = f"从数据库删除文件记录失败 {db_file_path}: {str(e)}"
                     logger.error(error_msg)
-                    send_error_notification_sync("system", None, error_msg)
+                    send_error_notification_sync("system",  error_msg)
 
         # 添加本地存在但数据库中没有的文件记录
         for root, dirs, files in os.walk(user_model_path):
@@ -638,7 +638,7 @@ class ModelService:
                     except Exception as e:
                         error_msg = f"同步模型文件到数据库失败 {file_path}: {str(e)}"
                         logger.error(error_msg)
-                        send_error_notification_sync("system", None, error_msg)
+                        send_error_notification_sync("system",  error_msg)
 
         return {
             "existing_count": existing_count,
@@ -694,7 +694,7 @@ class ModelService:
                     "error": str(e)
                 })
                 logger.error(f"同步用户 {user_id} 文件失败: {str(e)}")
-                send_error_notification_sync("system", None, f"同步用户 {user_id} 文件失败: {str(e)}")
+                send_error_notification_sync("system",  f"同步用户 {user_id} 文件失败: {str(e)}")
 
         return {
             "results": results
@@ -767,7 +767,7 @@ class ModelService:
         if not file_path or not os.path.exists(file_path):
             error_msg = f"数据文件 {file_name} 不存在"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 删除本地文件
@@ -776,7 +776,7 @@ class ModelService:
         except Exception as e:
             error_msg = f"删除本地文件失败 {file_path}: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 删除数据库记录
@@ -790,7 +790,7 @@ class ModelService:
         except Exception as e:
             error_msg = f"删除数据库记录失败: {str(e)}"
             logger.warning(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
 
         return {
             "file_path": file_path
@@ -814,7 +814,7 @@ class ModelService:
         if not os.path.exists(file_path):
             error_msg = f"模型文件 {file_name} 不存在"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 删除本地文件
@@ -823,7 +823,7 @@ class ModelService:
         except Exception as e:
             error_msg = f"删除本地文件失败 {file_path}: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 删除数据库记录
@@ -837,7 +837,7 @@ class ModelService:
         except Exception as e:
             error_msg = f"删除数据库记录失败: {str(e)}"
             logger.warning(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
 
         return {
             "file_path": file_path
@@ -864,7 +864,7 @@ class ModelService:
         if not old_file_path or not os.path.exists(old_file_path):
             error_msg = f"数据文件 {file_name} 不存在"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 确定新文件路径
@@ -879,7 +879,7 @@ class ModelService:
         except Exception as e:
             error_msg = f"创建目录失败 {os.path.dirname(new_file_path)}: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 重命名文件
@@ -888,7 +888,7 @@ class ModelService:
         except Exception as e:
             error_msg = f"重命名文件失败 {old_file_path} -> {new_file_path}: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 更新数据库记录
@@ -907,7 +907,7 @@ class ModelService:
         except Exception as e:
             error_msg = f"更新数据库记录失败: {str(e)}"
             logger.warning(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
 
         return {
             "old_file_path": old_file_path,
@@ -933,7 +933,7 @@ class ModelService:
         if not os.path.exists(old_file_path):
             error_msg = f"模型文件 {file_name} 不存在"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 确定新文件名
@@ -954,7 +954,7 @@ class ModelService:
         except Exception as e:
             error_msg = f"创建目录失败 {os.path.dirname(new_file_path)}: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 重命名文件
@@ -963,7 +963,7 @@ class ModelService:
         except Exception as e:
             error_msg = f"重命名文件失败 {old_file_path} -> {new_file_path}: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
             raise Exception(error_msg)
 
         # 更新数据库记录
@@ -982,7 +982,7 @@ class ModelService:
         except Exception as e:
             error_msg = f"更新数据库记录失败: {str(e)}"
             logger.warning(error_msg)
-            send_error_notification_sync("system", None, error_msg)
+            send_error_notification_sync("system",  error_msg)
 
         return {
             "old_file_path": old_file_path,

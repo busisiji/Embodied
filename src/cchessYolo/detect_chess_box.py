@@ -197,63 +197,96 @@ def calculate_4x4_collection_positions(corner_points, type='vec'):
 
     # 提取四个角点的世界坐标
     topLeft, topRight, bottomRight, bottomLeft = corner_points
-    # 对bottomRight和bottomLeft的x坐标进行调整（减去2）
-    bottomRight = (bottomRight[0] - 2, bottomRight[1])
-    bottomLeft = (bottomLeft[0] - 2, bottomLeft[1])
+
+    # 检查四边形尺寸是否至少为 PIECE_SIZE * 4
+    # 计算宽度（上下两边）
+    top_width = np.linalg.norm(np.array(topRight) - np.array(topLeft))
+    bottom_width = np.linalg.norm(np.array(bottomRight) - np.array(bottomLeft))
+
+    # 计算高度（左右两边）
+    left_height = np.linalg.norm(np.array(bottomLeft) - np.array(topLeft))
+    right_height = np.linalg.norm(np.array(bottomRight) - np.array(topRight))
+
+    min_width = min(top_width, bottom_width)
+    min_height = min(left_height, right_height)
+
+    # 最小尺寸要求
+    min_required_size = PIECE_SIZE * 4
+
+    # 如果不满足条件，则调整角点位置
+    if min_width < min_required_size or min_height < min_required_size:
+        print(f"⚠️ 四边形尺寸过小: 宽度={min_width:.2f}, 高度={min_height:.2f}, 最小要求={min_required_size}")
+        print("正在调整四边形尺寸...")
+
+        # 计算中心点
+        center_x = (topLeft[0] + topRight[0] + bottomRight[0] + bottomLeft[0]) / 4
+        center_y = (topLeft[1] + topRight[1] + bottomRight[1] + bottomLeft[1]) / 4
+        center = np.array([center_x, center_y])
+
+        # 计算原始向量
+        top_vector = np.array(topRight) - np.array(topLeft)
+        left_vector = np.array(bottomLeft) - np.array(topLeft)
+
+        # 调整向量长度以满足最小尺寸要求
+        if min_width < min_required_size:
+            # 调整水平向量
+            top_norm = np.linalg.norm(top_vector)
+            if top_norm > 0:
+                top_vector = top_vector / top_norm * min_required_size
+
+        if min_height < min_required_size:
+            # 调整垂直向量
+            left_norm = np.linalg.norm(left_vector)
+            if left_norm > 0:
+                left_vector = left_vector / left_norm * min_required_size
+
+        # 重新计算角点位置
+        topLeft = center - top_vector/2 - left_vector/2
+        topRight = center + top_vector/2 - left_vector/2
+        bottomRight = center + top_vector/2 + left_vector/2
+        bottomLeft = center - top_vector/2 + left_vector/2
+
+        # 转换为元组格式
+        topLeft = tuple(topLeft)
+        topRight = tuple(topRight)
+        bottomRight = tuple(bottomRight)
+        bottomLeft = tuple(bottomLeft)
+
+        print("四边形尺寸已调整以满足最小要求")
 
     collection_positions = []
-    size = PIECE_SIZE
-    # 从左上角点开始，按PIECE_SIZE依次排列
-    base_x, base_y = topLeft
-    base_x = base_x + CHESSBOX_DEVX
-    base_y = base_y + CHESSBOX_DEVY
 
-    if type == 'lt':
-        for col in range(4):
-            for row in range(4):
-                # 每个点相对于左上角点向右和向下偏移n个PIECE_SIZE
-                center_x = base_x + row * size
-                center_y = base_y - col * size
-                collection_positions.append((center_x, center_y))
-    elif type == 'vec':
-        # 每格中心距离为size，以左上角为基准点，考虑xy的倾斜角度
+    if type == 'vec':
+        # 使用向量方法计算，考虑棋盘可能的倾斜角度
         # 计算x轴和y轴的单位向量（考虑倾斜角度）
         # x方向向量：从左上到右上
         x_vector = np.array([topRight[0] - topLeft[0], topRight[1] - topLeft[1]])
         # y方向向量：从左上到左下
         y_vector = np.array([bottomLeft[0] - topLeft[0], bottomLeft[1] - topLeft[1]])
 
-        # 归一化向量并乘以size作为步长
-        x_distance = np.linalg.norm(x_vector)
-        y_distance = np.linalg.norm(y_vector)
+        # 计算每一步的向量（整个棋盘分为4份）
+        x_step = x_vector / 4.0
+        y_step = y_vector / 4.0
 
-        if x_distance > 0:
-            x_unit_vector = x_vector / x_distance * size
-        else:
-            x_unit_vector = np.array([size, 0])
-
-        if y_distance > 0:
-            y_unit_vector = y_vector / y_distance * size
-        else:
-            y_unit_vector = np.array([0, size])
-
-        # 从上到下，从左到右遍历16个格子
+        # 从上到下，从左到右遍历16个格子中心点
+        # 每个格子中心点位于格子的中心，需要加上半步长
         for row in range(4):
             for col in range(4):
                 # 计算每个格子中心点的位置
-                # 考虑到xy轴可能的倾斜角度
-                center_x = base_x + col * x_unit_vector[0] + row * y_unit_vector[0]
-                center_y = base_y + col * x_unit_vector[1] + row * y_unit_vector[1]
+                # 起始点是topLeft，加上相应步数和半个步长以定位到格子中心
+                center_x = round(topLeft[0] + (col + 0.5) * x_step[0] + (row + 0.5) * y_step[0], 2)
+                center_y = round(topLeft[1] + (col + 0.5) * x_step[1] + (row + 0.5) * y_step[1], 2)
                 collection_positions.append((center_x, center_y))
     else:
-        # 2. 将四边形划分为4x4网格，计算每个区域的中心点
-        # 从上到下，从左到右遍历16个格子
+        # 使用双线性插值方法计算
+        # 从上到下，从左到右遍历16个格子中心点
         for row in range(4):
             for col in range(4):
                 # 计算在该格子中的相对位置 (0.0 到 1.0)
                 # u 代表水平方向 (列)，v 代表垂直方向 (行)
-                u = col / 3.0 if 3.0 > 0 else 0  # 列方向比例 0, 1/3, 2/3, 1
-                v = row / 3.0 if 3.0 > 0 else 0  # 行方向比例 0, 1/3, 2/3, 1
+                # 中心点位置为 (i+0.5)/4 形式
+                u = (col + 0.5) / 4.0  # 列方向比例 0.125, 0.375, 0.625, 0.875
+                v = (row + 0.5) / 4.0  # 行方向比例 0.125, 0.375, 0.625, 0.875
 
                 # 使用双线性插值计算格子中心点的世界坐标
                 # 先计算上下两条边上的点
@@ -268,5 +301,4 @@ def calculate_4x4_collection_positions(corner_points, type='vec'):
                 center_y = round(top_y + v * (bottom_y - top_y), 2)
 
                 collection_positions.append((center_x, center_y))
-
     return collection_positions

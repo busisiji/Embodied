@@ -25,7 +25,7 @@ class DatabaseManager:
         except Exception as e:
             error_msg = f"初始化数据库失败: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("database", None, error_msg)
+            send_error_notification_sync("database",  error_msg)
             raise Exception(error_msg)
 
 
@@ -45,7 +45,7 @@ class DatabaseManager:
         except Exception as e:
             error_msg = f"添加数据文件记录失败: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("database",None, error_msg)
+            send_error_notification_sync("database",error_msg)
             raise Exception(error_msg)
 
     def update_data_file(self, data_id, game_count=None, data_length=None):
@@ -61,12 +61,12 @@ class DatabaseManager:
         except DataFile.DoesNotExist:
             error_msg = f"数据文件记录 {data_id} 不存在"
             logger.error(error_msg)
-            send_error_notification_sync("database", None, error_msg)
+            send_error_notification_sync("database",  error_msg)
             raise Exception(error_msg)
         except Exception as e:
             error_msg = f"更新数据文件记录失败: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("database", None, error_msg)
+            send_error_notification_sync("database",  error_msg)
             raise Exception(error_msg)
 
     def add_model_file(self, user_id, training_epochs, file_path, file_type="models"):
@@ -84,7 +84,7 @@ class DatabaseManager:
         except Exception as e:
             error_msg = f"添加模型文件记录失败: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("database", None, error_msg)
+            send_error_notification_sync("database",  error_msg)
             raise Exception(error_msg)
 
     def get_latest_data_file(self, user_id):
@@ -106,7 +106,7 @@ class DatabaseManager:
         except Exception as e:
             error_msg = f"获取最新数据文件失败: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("database", None, error_msg)
+            send_error_notification_sync("database",  error_msg)
             raise Exception(error_msg)
 
     def get_latest_model_file(self, user_id):
@@ -127,7 +127,7 @@ class DatabaseManager:
         except Exception as e:
             error_msg = f"获取最新模型文件失败: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("database", None, error_msg)
+            send_error_notification_sync("database",  error_msg)
             raise Exception(error_msg)
 
     def get_all_data_files(self, user_id):
@@ -151,7 +151,7 @@ class DatabaseManager:
         except Exception as e:
             error_msg = f"获取用户数据文件列表失败: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("database", None, error_msg)
+            send_error_notification_sync("database",  error_msg)
             raise Exception(error_msg)
 
     def get_all_model_files(self, user_id):
@@ -174,5 +174,5 @@ class DatabaseManager:
         except Exception as e:
             error_msg = f"获取用户模型文件列表失败: {str(e)}"
             logger.error(error_msg)
-            send_error_notification_sync("database", None, error_msg)
+            send_error_notification_sync("database",  error_msg)
             raise Exception(error_msg)

@@ -14,9 +14,8 @@ from typing import List, Callable, Optional
 import sys
 import os
 
-from services.tts_service import tts_manager, speak
-from utils.speech_train.model_update import suggest_vocabulary_for_industrial_control
-from websocket_manager import manager, send_message
+from api.services.tts_service import tts_manager, speak_await, speak_async
+from src.speech.model_update import suggest_vocabulary_for_chess
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -29,8 +28,7 @@ class OfflineKeywordRecognizer():
     def __init__(self, keywords: List[str],
                  wake_words: List[str] = None,
                  callback: Optional[Callable] = None,
-                 wake_callback: Optional[Callable] = None,
-                 model_path: str = os.path.join(current_dir, "../models/speech_model")):
+                 model_path: str = os.path.join(current_dir, "speech_model")):
         """
         初始化离线关键词识别器
 
@@ -38,18 +36,15 @@ class OfflineKeywordRecognizer():
             keywords: 需要识别的关键词列表
             wake_words: 唤醒词列表
             callback: 识别到关键词后的回调函数
-            wake_callback: 唤醒后的回调函数
             model_path: 离线模型路径
         """
-        self.keywords = [kw.lower() for kw in keywords]
-        self.wake_words = [ww.lower() for ww in wake_words] if wake_words else ["小助手", "你好"]
         self.callback = callback
-        self.wake_callback = wake_callback
         self.is_listening = False
         self.is_awake = False
         self.wake_timeout = 180  # 唤醒后保持活跃的时间（秒）
         self.last_wake_time = 0
         self._paused = False  # 添加暂停状态
+        self.data_bytes = None
 
         # 添加设备状态和启动状态
         self.start_state = "停止"  # 启动状态: 停止/启动
@@ -65,12 +60,8 @@ class OfflineKeywordRecognizer():
 
         # 加载模型
         self.model = self._load_model(model_path)
-        vocab_words = suggest_vocabulary_for_industrial_control()
-        self.recognizer = KaldiRecognizer(self.model, self.sample_rate, json.dumps(vocab_words, ensure_ascii=False))
-        self.recognizer.SetWords(True)
 
-        self.last_tts_time = 0  # 记录最后一次TTS时间
-        self.tts_cooldown = 0.0  # TTS结束后2秒内忽略识别结果
+        self.update_keywords(keywords, wake_words)
 
         print("离线语音识别器初始化完成")
         print(f"唤醒词: {', '.join(self.wake_words)}")
@@ -79,6 +70,76 @@ class OfflineKeywordRecognizer():
         # 将语音识别器设置到TTS管理器中
         if tts_manager:
             tts_manager.set_speech_recognizer(self)
+
+        self.last_tts_time = 0  # 记录最后一次TTS时间
+        self.tts_cooldown = 0.0  # TTS结束后2秒内忽略识别结果
+    def update_keywords(self, keywords, wake_words = None):
+        """
+        更新识别器的关键词和唤醒词
+
+        Args:
+            keywords: 新的关键词列表
+            wake_words: 新的唤醒词列表
+        """
+        self.keywords = [kw.lower() for kw in keywords]
+        if wake_words:
+            self.wake_words = [ww.lower() for ww in wake_words]
+
+        # 更新识别器的词汇表
+        vocab_words = suggest_vocabulary_for_chess() if "棋" in keywords or any(piece in str(keywords) for piece in ['车', '马', '炮', '象', '士', '将', '帅', '兵', '卒']) else keywords
+        self.recognizer = KaldiRecognizer(self.model, self.sample_rate, json.dumps(vocab_words, ensure_ascii=False))
+        self.recognizer.SetWords(True)
+
+        print(f"已更新关键词: {', '.join(self.keywords)}")
+        if self.wake_words:
+            print(f"已更新唤醒词: {', '.join(self.wake_words)}")
+
+    def re_recognize_with_vocabulary(self, vocabulary_type="chess"):
+        """
+        使用指定词汇表重新识别最近的音频数据
+
+        Args:
+            vocabulary_type: 词汇表类型 ("chess" 或 "default")
+
+        Returns:
+            str: 重新识别的文本结果
+        """
+        # 清空当前识别器的结果缓存
+        self.recognizer.FinalResult()
+
+        # 根据类型设置对应的词汇表
+        if vocabulary_type == "chess":
+            chess_keywords = [
+                # 棋子名称
+                "车", "马", "炮", "象", "相", "士", "仕", "将", "帅", "兵", "卒",
+                # 棋盘坐标 (列)
+                "一", "二", "三", "四", "五", "六", "七", "八", "九",
+                # 移动方向
+                "进", "退", "平",
+                # 位置描述
+                "前", "后", "中",
+                # 数字
+                "1", "2", "3", "4", "5", "6", "7", "8", "9"
+            ]
+            vocab_words = chess_keywords
+        else:
+            # 使用默认词汇表
+            vocab_words = self.keywords
+
+        # 更新识别器的词汇表
+        self.update_keywords(vocab_words)
+
+        print(f"已切换到{vocabulary_type}词汇表进行重新识别")
+
+        # 进行识别
+        if self.recognizer.AcceptWaveform(self.data_bytes):
+            result = json.loads(self.recognizer.Result())
+            if 'text' in result and result['text'].strip():
+                recognized_text = result['text'].strip()
+                print(f"重新识别结果: {recognized_text}")
+                return recognized_text
+
+        return ""
 
     def _load_model(self, model_path: str):
         """
@@ -93,7 +154,7 @@ class OfflineKeywordRecognizer():
         try:
             # 检查模型是否存在
             if not os.path.exists(model_path):
-                print("未找到离线语音识别模型，正在下载...")
+                print(f"未找到离线语音识别模型{model_path}，正在下载...")
                 self._download_model(model_path)
 
             model = Model(model_path)
@@ -146,8 +207,8 @@ class OfflineKeywordRecognizer():
             self.is_awake = False
             print("唤醒状态已超时，进入休眠模式")
             # 发送休眠WebSocket消息
-            asyncio.run(send_message('sleep'))
-            asyncio.run(speak("我睡了"))
+            # asyncio.run(send_message('sleep'))
+            asyncio.run(tts_manager._speak_text("我睡了"))
 
     def process_text(self, text: str):
         """
@@ -182,9 +243,7 @@ class OfflineKeywordRecognizer():
                 print(f"唤醒词匹配耗时: {wake_check_time*1000:.2f}ms")
 
                 # 异步执行唤醒回调
-                if self.wake_callback:
-                    threading.Thread(target=self._async_wake_callback,
-                                   args=(wake_word, text), daemon=True).start()
+                self._async_wake_callback(wake_word)
 
                 callback_start_time = time.time()
                 callback_scheduling_time = callback_start_time - wake_found_time
@@ -231,13 +290,13 @@ class OfflineKeywordRecognizer():
         total_time = time.time() - start_time
         print(f"文本处理总耗时: {total_time*1000:.2f}ms")
 
-    def _async_wake_callback(self, wake_word: str, full_text: str):
+    def _async_wake_callback(self, wake_word: str):
         """
         异步执行唤醒回调函数
         """
         try:
-            if self.wake_callback:
-                self.wake_callback(wake_word, full_text)
+            print(f"系统被唤醒: {wake_word}")
+            asyncio.run(tts_manager._speak_text("我在"))
         except Exception as e:
             print(f"异步唤醒回调执行错误: {e}")
 
@@ -292,19 +351,19 @@ class OfflineKeywordRecognizer():
                             avg_data_get_time = sum(self.data_get_times) / len(self.data_get_times) if self.data_get_times else 0
 
                             # 转换为bytes
-                            data_bytes = data.tobytes()
+                            self.data_bytes = data.tobytes()
 
                             # print(f"数据获取耗时: {data_get_time*1000:.2f}ms (平均: {avg_data_get_time*1000:.2f}ms)")
 
                             # 如果被暂停，则跳过处理
                             if self._paused:
                                 print("已暂停，正在等待...")
-                                time.sleep(0.1)
+                                time.sleep(1)
                                 continue
 
                             # 识别音频
                             recognition_start_time = time.time()
-                            if self.recognizer.AcceptWaveform(data_bytes):
+                            if self.recognizer.AcceptWaveform(self.data_bytes):
                                 result = json.loads(self.recognizer.Result())
                                 recognition_time = time.time() - recognition_start_time
 
@@ -437,8 +496,13 @@ def initialize_speech_recognizer():
     """
     global speech_recognizer
     try:
+        # 检查是否已经初始化
+        if speech_recognizer is not None:
+            print("语音识别器已经初始化，无需重复初始化")
+            return False
+
         # 读取words.txt文件中的关键词
-        words_file_path = os.path.join(current_dir, "../utils/speech_train/words.txt")
+        words_file_path = os.path.join(current_dir, "speech_model/words.txt")
         keywords = []
 
         if os.path.exists(words_file_path):
@@ -449,21 +513,85 @@ def initialize_speech_recognizer():
                         keywords.append(word)
         else:
             print(f"警告: 找不到词汇文件 {words_file_path}，使用默认关键词")
-            # 默认关键词列表（如果文件不存在时使用）
-            keywords = ["设备", "开始", "结束", "停止", "启动", "复位",
-                       "装配", "出库", "车库", "入库", "库",
-                       "一号", "二号", "三号", "四号",
-                       "一", "二", "三", "四",
-                       "检测", "抓取", "查找", "寻找", '我要', "吸取",
-                       "红色", "蓝色", "绿色", "黄色", "紫色", "橙色", "黑色", "白色",
-                       "圆", "原型", "方形", "矩形", "四边", "三角", "五边", "五角"]
+            # 象棋相关关键词列表（如果文件不存在时使用）
+            keywords = [
+                # 唤醒词
+                "小助手", "你好",
+
+                # 游戏控制
+                "开始", "重新开始", "结束", "暂停", "继续",
+                "布局", "布棋", "收棋", "收局", "收子",
+                "悔棋", "认输", "投降", "退出", "帮助",
+                "上一步", "下一步", "第一步", "最后一步",
+
+                # 棋子名称
+                "车", "马", "炮", "象", "相", "士", "仕",
+                "将", "帅", "兵", "卒", "車", "馬", "砲",
+                "紅方", "黑方", "红方", "黑方",
+
+                # 棋盘坐标 (列)
+                "一", "二", "三", "四", "五", "六", "七", "八", "九",
+                "1", "2", "3", "4", "5", "6", "7", "8", "9",
+
+                # 棋盘坐标 (行)
+                "前", "后", "中", "上", "下", "左", "右",
+
+                # 象棋术语
+                "吃子", "将军", "照将", "胜负", "平局",
+                "长将", "长杀", "长捉", "捉子", "兑子",
+                "弃子", "献子", "等着", "先手", "后手",
+                "开局", "中局", "残局", "杀棋", "困毙",
+
+                # 移动指令
+                "进", "退", "平", "走", "移动", "跳", "飞",
+                "打", "吃", "捉", "献", "兑", "拦", "堵",
+
+                # 难度设置
+                "简单", "中等", "困难", "初级", "中级", "高级",
+                "难度", "级别", "等级",
+
+                # 游戏状态
+                "思考中", "等待", "轮到", "回合", "时间",
+                "超时", "违规", "重新走", "无效",
+
+                # 语音反馈
+                "我在", "好的", "明白", "确认", "取消",
+                "是的", "不是", "可以", "不可以",
+
+                # 常见干扰词（容易被误识别的词语）
+                # 日常用语
+                "什么", "怎么", "为什么", "可以", "不能",
+                "现在", "这里", "那里", "这个", "那个",
+                "一下", "一下下", "一点点", "很多", "一些",
+
+                # 数字
+                "零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
+                "百", "千", "万", "亿",
+
+                # 量词
+                "个", "只", "台", "套", "件", "块", "片", "张", "条", "根",
+
+                # 方位词
+                "上", "下", "左", "右", "前", "后", "里", "外", "内", "中",
+
+                # 动词
+                "是", "有", "在", "做", "看", "听", "说", "想", "要", "会",
+
+                # 形容词
+                "好", "坏", "大", "小", "多", "少", "快", "慢", "高", "低",
+
+                # 语气词
+                "啊", "哦", "嗯", "呃", "啦", "吧", "吗", "呢", "了", "的",
+
+                # 常见名词
+                "东西", "地方", "时候", "时间", "问题", "情况", "方法", "工作",
+            ]
 
         # 初始化语音识别器但不启动监听
         speech_recognizer = OfflineKeywordRecognizer(
             keywords=keywords,
             wake_words=["小助手"],
             callback=command_callback,
-            wake_callback=wake_callback_default
         )
         print("/语音识别器初始化完成")
         return True
@@ -482,24 +610,6 @@ def cleanup_speech_recognizer():
         speech_recognizer.stop_listening()
         print("/语音识别器已停止")
 
-def wake_callback_default(wake_word: str, full_text: str):
-    """
-    默认唤醒回调函数（优化版）
-    """
-    print(f"系统被唤醒: {wake_word}")
-
-    # 使用新线程执行耗时操作，避免阻塞语音识别
-    def async_operations():
-        try:
-            # 发送唤醒WebSocket消息
-            asyncio.run(send_message('awake'))
-            # 异步执行TTS，避免阻塞
-            asyncio.run(speak("我在"))
-        except Exception as e:
-            print(f"唤醒回调执行错误: {e}")
-
-    # 启动新线程执行操作
-    threading.Thread(target=async_operations, daemon=True).start()
 
 
 async def handle_detection_command(shape=None, color=None):
@@ -565,12 +675,12 @@ async def handle_detection_command(shape=None, color=None):
             target_shape = "circle"
 
     try:
-        time_speak = time.time()
+        time_speak_sync = time.time()
         # 在开始网络请求前先进行语音反馈
         msg = f"正在查找{color_chinese_map.get(target_color)}{shape_chinese_map.get(target_shape)}"
         # 使用 create_task 在后台执行 TTS，不阻塞当前函数
-        tts_task = asyncio.create_task(speak(msg))
-        print(f"正在执行检测命令: {msg}",time.time()-time_speak)
+        tts_task = asyncio.create_task(speak_await(msg))
+        print(f"正在执行检测命令: {msg}",time.time()-time_speak_sync)
 
         # 调用摄像头API进行检测
         url = "http://localhost:8000/camera/get_world_position"
@@ -591,143 +701,34 @@ async def handle_detection_command(shape=None, color=None):
                     result = await response.json()
 
                     if "error" in result:
-                        asyncio.create_task(speak(f"未找到{color_chinese_map.get(target_color)}{shape_chinese_map.get(target_shape)}"))
+                        asyncio.create_task(speak_await(f"未找到{color_chinese_map.get(target_color)}{shape_chinese_map.get(target_shape)}"))
                     else:
                         objects = result.get("objects", [])
                         if len(objects) == 0:
-                            asyncio.create_task(speak(f"未找到{color_chinese_map.get(target_color)}{shape_chinese_map.get(target_shape)}"))
+                            asyncio.create_task(speak_await(f"未找到{color_chinese_map.get(target_color)}{shape_chinese_map.get(target_shape)}"))
                         elif len(objects) >= 1:
                             obj = objects[0]
                             msg = f"正在抓取{color_chinese_map.get(target_color)}{shape_chinese_map.get(target_shape)}"
-                            asyncio.create_task(speak(msg))
+                            asyncio.create_task(speak_await(msg))
 
             except asyncio.TimeoutError:
                 print("请求超时")
-                asyncio.create_task(speak("查找超时，请重试"))
+                asyncio.create_task(speak_await("查找超时，请重试"))
             except aiohttp.ClientError as e:
                 print(f"HTTP请求错误: {e}")
-                asyncio.create_task(speak("网络请求失败，请检查网络连接"))
+                asyncio.create_task(speak_await("网络请求失败，请检查网络连接"))
 
         print(f"检测命令总耗时: {time.time() - start_time:.3f}秒")
 
     except Exception as e:
         print(f"检测命令执行错误: {e}")
-        asyncio.create_task(speak("执行检测命令时发生错误"))
+        asyncio.create_task(speak_await("执行检测命令时发生错误"))
 
 def command_callback(keywords: List[str], full_text: str):
     """
-    改进的命令回调函数 - 支持更多命令并提高识别准确率
+    象棋命令回调函数 - 支持象棋相关命令
     """
     print(f"执行命令: {keywords}")
-
-    # 设备控制命令
-    if "启动" in full_text :
-        print("执行启动命令")
-        asyncio.run(send_message('start'))
-        asyncio.run(speak("设备启动"))
-        return True
-    elif "停止" in full_text :
-        print("执行停止命令")
-        asyncio.run(send_message('stop'))
-        asyncio.run(speak("设备停止"))
-        return True
-    elif "复位" in full_text :
-        print("执行复位命令")
-        asyncio.run(send_message('reset'))
-        asyncio.run(speak("设备复位"))
-        return  True
-    # 生产流程命令
-    elif "装配" in full_text:
-        print("执行结束装配命令")
-        asyncio.run(send_message('start_assembly'))
-        asyncio.run(speak("开始装配流程"))
-        return True
-    elif "出库" in full_text  or "车库" in full_text:
-        print("执行开始出库命令")
-        asyncio.run(send_message('start_outgoing'))
-        asyncio.run(speak("开始出库流程"))
-        return  True
-    elif "入库" in full_text :
-        print("执行开始入库命令")
-        asyncio.run(send_message('start_warehousing'))
-        asyncio.run(speak("开始入库流程"))
-        return True
-    elif "上电" in full_text :
-        print("执行上电命令")
-        asyncio.run(send_message('power_on'))
-        asyncio.run(speak("设备上电"))
-    elif "断电" in full_text :
-        print("执行断电命令")
-        asyncio.run(send_message('power_off'))
-        asyncio.run(speak("设备断电"))
-    elif "一号" in full_text :
-        print("执行一号库命令")
-        asyncio.run(send_message('storage1'))
-        asyncio.run(speak("执行开始入库命令"))
-        return True
-    elif "二号" in full_text :
-        print("执行二号库命令")
-        asyncio.run(send_message('storage2'))
-        asyncio.run(speak("执行开始入库命令"))
-        return True
-    elif "三号" in full_text :
-        print("执行三号库命令")
-        asyncio.run(send_message('storage3'))
-        asyncio.run(speak("执行开始入库命令"))
-        return True
-    elif "四号" in full_text :
-        print("执行四号库命令")
-        asyncio.run(send_message('storage4'))
-        asyncio.run(speak("执行开始入库命令"))
-        return True
-    # 颜色和形状检测命令
-    else:
-        # 提取颜色
-        color_map = {
-            "红色": "red",
-            "黄色": "yellow",
-            "蓝色": "blue",
-            "绿色": "green"
-        }
-        shape_map = {
-            "三角": "triangle",
-            "三边" : "triangle",
-            "正方": "rectangle",
-            "五边": "pentagon",
-            "五角": "pentagon",
-            "圆形  ": "circle",
-            "原型" : "circle",
-            "矩形": "rectangle",
-            "方形": "rectangle",
-            "四边": "rectangle"
-        }
-
-        target_color = None
-        target_shape = None
-
-        for chinese_shape, english_shape in shape_map.items():
-            if chinese_shape in full_text:
-                target_shape = english_shape
-                break
-
-        if target_shape:
-            print(f"执行检测命令: {target_shape}")
-            # 异步执行检测命令
-            asyncio.run(handle_detection_command(shape=target_shape))
-            return True
-
-        for chinese_color, english_color in color_map.items():
-            if chinese_color in full_text:
-                target_color = english_color
-                break
-
-        if target_color:
-            print(f"执行检测命令: {target_color}")
-            # 异步执行检测命令
-            asyncio.run(handle_detection_command(color=target_color))
-            return True
-
-    return  False
 
 
 
@@ -779,3 +780,46 @@ def is_awake():
     if speech_recognizer and hasattr(speech_recognizer, 'is_awake'):
         return speech_recognizer.is_awake
     return False
+
+if __name__ == "__main__":
+    """
+    主函数
+    """
+
+    async def main():
+        try:
+            # 在异步环境中初始化组件
+            initialize_speech_recognizer()
+            tts_manager._start_speech_queue_processor()
+
+            global speech_recognizer
+            if speech_recognizer:
+                await speech_recognizer.start_listening()
+                # 使用create_task确保TTS任务被正确调度
+                asyncio.create_task(speak_await("开始监听"))
+                print("语音识别已启动，按 Ctrl+C 退出...")
+            else:
+                print("语音识别器初始化失败")
+                return
+
+            # 保持事件循环运行
+            while True:
+                await asyncio.sleep(1)
+
+        except Exception as e:
+            print(f"程序运行出错: {e}")
+        finally:
+            # 清理资源
+            if speech_recognizer:
+                speech_recognizer.stop_listening()
+            print("语音识别已停止")
+
+    # 运行异步主函数
+    try:
+        print("正在启动语音识别服务...")
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n程序已退出")
+    except Exception as e:
+        print(f"程序启动失败: {e}")
+

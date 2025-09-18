@@ -12,6 +12,9 @@ class my_game():
         self.best_move = mc.step()
         self.cnt = 0
 
+    def get_board(self):
+        return self.board.get_board()
+
     def alpha_beta(self, depth, alpha, beta,move_list=None):  # alpha-beta剪枝，alpha是大可能下界，beta是最小可能上界
         who = (self.max_depth - depth) % 2  # 那个玩家
         if self.is_game_over(who):  # 判断是否游戏结束，如果结束了就不用搜了

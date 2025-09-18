@@ -3,7 +3,6 @@ import os
 import threading
 
 from piper import PiperVoice
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 def play_audio_file(file_path):
     """

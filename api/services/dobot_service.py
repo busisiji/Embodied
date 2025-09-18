@@ -1,8 +1,9 @@
 # api/services/dobot_service.py
 import time
 from typing import Optional
-from dobot import URController
 from api.services.process_service import ProcessService
+from dobot.dobot_control import URController
+
 
 class DobotService:
     def __init__(self):

@@ -92,7 +92,7 @@ def update_user(user_id: str, name: str = None, password: str = None):
         return user
     except Exception as e:
         logger.error(f"更新用户失败: {str(e)}")
-        send_error_notification_sync("user_service", None, f"更新用户失败: {str(e)}")
+        send_error_notification_sync("user_service", f"更新用户失败: {str(e)}")
         raise
 
 

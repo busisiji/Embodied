@@ -5,7 +5,7 @@ import chess_constants as cc
 '''
 
 
-class chess:
+class chess():
     def __init__(self, belong, chess_type):
         self.belong = belong  # 属于那方
         self.chess_type = chess_type  # 是什么棋
@@ -58,6 +58,23 @@ class chess_board():
                 for j in range(10):
                     strr = strr + " " + str(self.board[i][j].belong)
                 print(strr)
+
+
+    def get_board(self):
+        """
+        返回棋盘状态的简化版本，只返回棋子类型
+        返回一个9x10的二维数组
+        """
+        board_state = []
+        for i in range(9):
+            row = []
+            for j in range(10):
+                poise = cc.poise_type[self.board[i][j].chess_type]
+                if self.board[i][j].belong == 1:
+                    poise = poise.upper()
+                row.append(poise)
+            board_state.append(row)
+        return board_state
 
     def IsKingFaceToFace(self, x, y, who):
         a = False

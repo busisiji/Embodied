@@ -310,23 +310,23 @@ class ProcessService:
                     # 如果有错误，通过WebSocket发送通知
                     if error_lines:
                         error_msg = "进程发生错误:\n" + "\n".join(error_lines)
-                        send_error_notification_sync(process_type, process_id, error_msg)
+                        send_error_notification_sync(process_type, error_msg, process_id)
             except UnicodeDecodeError as e:
                 logger.error(f"读取stderr时发生编码错误: {str(e)}")
                 error_msg = f"读取进程输出时发生编码错误: {str(e)}"
-                send_error_notification_sync(process_type, process_id, error_msg)
+                send_error_notification_sync(process_type, error_msg, process_id)
             # 检查进程退出状态
             return_code = process.returncode
             if return_code != 0:
                 error_msg = f"进程异常退出，返回码: {return_code}"
                 logger.error(error_msg)
-                send_error_notification_sync(process_type, process_id, error_msg)
+                send_error_notification_sync(process_type, error_msg, process_id)
         except Exception as e:
             error_msg = f"读取进程输出时发生错误: {str(e)}"
             logger.error(error_msg)
             if process_id in running_processes:
                 process_type = running_processes[process_id]["type"]
-                send_error_notification_sync(process_type, process_id, error_msg)
+                send_error_notification_sync(process_type, error_msg, process_id)
 
 
     @staticmethod

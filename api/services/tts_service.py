@@ -3,15 +3,18 @@ import asyncio
 import os
 import platform
 import sys
+import threading
 import time
 import socket
 
 import aiohttp
 from concurrent.futures import ThreadPoolExecutor
 
-from utils.tts_utils.edgeTTS import EdgeTTSWrapper
+from src.tts_utils.edgeTTS import EdgeTTSWrapper
+from src.tts_utils.ekhoTTS import EkhoTTS
+from src.tts_utils.piperTTS import synthesize_and_play
 
-
+voice_loop,voice_thread = None,None
 class TTSManager:
     """
     统一的TTS管理器，根据系统环境和网络状态选择合适的TTS引擎
@@ -28,16 +31,14 @@ class TTSManager:
         self.piper_available = False
 
         # 添加语音队列相关属性
-        self.speech_queue = None  # 初始化为None，稍后在事件循环中创建
+        self.speech_queue = None
         self.speech_task = None
         self.is_speaking = False
 
         self._initialize_tts()
         self.was_listening = False
-
-        asyncio.run(self._check_network_async())
-        # 不再在初始化时启动处理任务
-        # self._start_speech_queue_processor()
+        self.is_network_available = True
+        # asyncio.run(self._check_network_async())
 
     def _check_network(self):
         """
@@ -74,7 +75,7 @@ class TTSManager:
 
             # 尝试加载模型文件
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            model_path = os.path.join(current_dir, "../utils/tts_utils/../../models/tts_model/zh_CN-huayan-medium.onnx")
+            model_path = os.path.join(current_dir, "../../src/tts_utils/tts_model/zh_CN-huayan-medium.onnx")
 
             if os.path.exists(model_path):
                 # 尝试加载模型
@@ -83,7 +84,7 @@ class TTSManager:
                     print("✅ Piper TTS 可用")
                     return True
             else:
-                print("❌ Piper 模型文件不存在")
+                print(f"❌ Piper 模型文件不存在{model_path}")
         except Exception as e:
             print(f"❌ Piper TTS 不可用: {e}")
 
@@ -170,11 +171,13 @@ class TTSManager:
         """
         处理语音播报队列中的任务
         """
+        print("处理语音播报队列中的任务")
         # 确保队列已初始化
         if self.speech_queue is None:
             self.speech_queue = asyncio.Queue()
 
         while True:
+
             try:
                 # 从队列中获取播报文本
                 text = await self.speech_queue.get()
@@ -197,19 +200,31 @@ class TTSManager:
             except Exception as e:
                 print(f"处理语音队列时出错: {e}")
 
+
     def _start_speech_queue_processor(self):
         """
         启动语音队列处理任务
         """
-        # 确保在有事件循环的情况下创建任务
         try:
-            loop = asyncio.get_running_loop()
-            self.speech_task = loop.create_task(self._process_speech_queue())
-        except RuntimeError:
-            # 如果没有运行中的事件循环，则安排到默认事件循环
-            loop = asyncio.get_event_loop()
-            self.speech_task = loop.create_task(self._process_speech_queue())
+            # 如果任务已存在且正在运行，直接返回
+            if self.speech_task and not self.speech_task.done():
+                print("✅ 语音队列处理器已在运行")
+                return True
 
+            # 获取事件循环
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # 如果没有运行中的事件循环，创建新任务
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            self.speech_task = loop.create_task(self._process_speech_queue())
+            print("✅ 语音队列处理器已启动")
+            return True
+        except Exception as e:
+            print(f"❌ 启动语音队列处理器失败: {e}")
+            return False
     async def _speak_text(self, text):
         """
         实际执行文本播报的逻辑
@@ -255,7 +270,7 @@ class TTSManager:
             # 播报完成后恢复语音识别（如果之前是开启状态）
             if self.was_listening and self.speech_recognizer:
                 # 异步等待播报完全结束并增加额外延迟
-                await asyncio.sleep(0.5)  # 异步延迟，确保音频播放完成
+                # await asyncio.sleep(0.5)  # 异步延迟，确保音频播放完成
                 self.speech_recognizer.resume_listening()
 
     async def _speak_with_edge_tts_async(self, text):
@@ -306,7 +321,6 @@ class TTSManager:
         在线程中运行的阻塞式Piper TTS调用
         """
         try:
-            from utils.tts_utils.piperTTS import synthesize_and_play
             sys.path.append(os.path.dirname(os.path.abspath(__file__)))
             print("🔄 使用 Piper TTS 引擎")
             synthesize_and_play(text)
@@ -319,7 +333,6 @@ class TTSManager:
         异步执行Ekho TTS调用
         """
         try:
-            from utils.tts_utils.ekhoTTS import EkhoTTS
             print("🔄 使用 Ekho TTS 引擎")
             ekho_tts = EkhoTTS()
 
@@ -345,12 +358,6 @@ class TTSManager:
             print("⚠️ 无法使用任何TTS引擎播报文本")
 
 
-    def start_processing(self):
-        """
-        启动语音队列处理任务（应在事件循环启动后调用）
-        """
-        self._start_speech_queue_processor()
-
     def __del__(self):
         """
         析构函数，关闭线程池和队列任务
@@ -363,33 +370,47 @@ class TTSManager:
 
 # 创建全局TTS管理器实例
 tts_manager = TTSManager()
-
-# 在模块加载后，提供一个方法来启动处理任务
-def initialize_tts_processing():
+def _init_voice_async_loop():
     """
-    初始化TTS处理任务（应在事件循环启动后调用）
+    初始化异步语音播报的事件循环
     """
-    tts_manager.start_processing()
-
-async def speak(text: str):
-    """
-    异步文本转语音播放（确保不阻塞）
-    """
-    global tts_manager, last_tts_time
-
-    if tts_manager:
+    if voice_loop is not None:
+        print("语音事件循环已存在，无需重复初始化")
+        return False
+    def run_loop():
         try:
-            # 使用完全异步方式播放音频
-            await tts_manager.speak_async(text)
-            last_tts_time = time.time()
-        except Exception as e:
-            print(f"TTS播放错误: {e}")
-    else:
-        print("TTS管理器未初始化")
+            global voice_loop,voice_thread,camera
+            voice_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(voice_loop)
 
-async def speak_sync(text: str):
+            # 在事件循环启动后立即启动TTS处理器
+            tts_manager._start_speech_queue_processor()
+
+            # 运行事件循环
+            voice_loop.run_forever()
+            print("✅ 语音事件循环已启动")
+        except Exception as e:
+            print(f"⚠️ 语音事件循环启动失败: {e}")
+
+    voice_thread = threading.Thread(target=run_loop, daemon=True)
+    voice_thread.start()
+
+    # 等待循环初始化完成
+    while voice_loop is None:
+        time.sleep(0.01)
+async def speak_async(text: str):
+    try:
+        # 在异步事件循环中执行
+        asyncio.run_coroutine_threadsafe(
+            tts_manager.speak_async(text),
+            voice_loop
+        )
+    except:
+        print("无法使用TTS播放文本")
+
+async def speak_await(text: str):
     """
-    同步文本转语音播放（阻塞当前线程）
+    同步文本转语音播放（不按隊列）
     """
     global tts_manager, last_tts_time
 
@@ -408,11 +429,9 @@ async def speak_sync(text: str):
 if __name__ == "__main__":
     async def main():
         # 创建TTS管理器实例
-        global tts_manager
-        tts_manager = TTSManager()
 
         # 启动处理任务
-        tts_manager.start_processing()
+        tts_manager._start_speech_queue_processor()
 
         # 测试文本
         test_text = "你好，这是统一TTS管理器的异步播报测试。"

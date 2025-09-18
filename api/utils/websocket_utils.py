@@ -28,7 +28,7 @@ async def send_error_notification(process_type: str, process_id: str, error_mess
     except Exception as e:
         logger.error(f"通过WebSocket发送错误通知失败: {str(e)}")
 
-def send_error_notification_sync(process_type: str, process_id: str, error_message: str):
+def send_error_notification_sync(process_type: str,error_message: str='', process_id: str = None):
     """
     同步版本的错误通知发送方法
     """

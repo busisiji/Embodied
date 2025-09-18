@@ -243,6 +243,9 @@ class MainGame():
         txt = font.render(text, True, constants.TEXT_COLOR)
         return txt
 
+    def get_board(self):
+        return self.mgInit.get_board()
+
     def endGame(self):
         print("exit")
         exit()

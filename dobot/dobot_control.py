@@ -11,6 +11,7 @@ from dobot.dobot_api import DobotApiDashboard, DobotApiMove, DobotApi, MyType
 from api.utils.websocket_utils import send_error_notification_sync
 from parameters import RED_CAMERA, POINT_HOME, POINT_TRANSIT, POINT_DOWN, POINT_UP, SAC_CAMERA, FOUR_WORLD_SAC, \
     POINT_SAC_DOWN, IO_QI, RCV_CAMERA, BLACK_CAMERA
+from utils.calibrationManager import pixel_to_world
 
 
 def _is_empty_error_list(error_info):
@@ -166,8 +167,8 @@ class URController:
         try:
             send_error_notification_sync(
                 process_type="dobot_alarm",
+                error_message=message,
                 process_id="dobot_controller",
-                error_message=message
             )
         except Exception as ws_error:
             print(f"⚠️ WebSocket通知发送失败: {str(ws_error)}")
@@ -1625,28 +1626,34 @@ if __name__ == "__main__":
     urController = connect_and_check_speed()
     print(f"📍 当前位置: {urController.get_current_position()}")
     if urController:
+        # x,y = pixel_to_world(114,140)
+        # print(x,y)
         # urController.run_point_j([-173,-198,195,-179,0.2,-179])
         # time.sleep(5)
-        # urController.run_point_j(BLACK_CAMERA)
+        # urController.run_point_j(RED_CAMERA)
+        # urController.run_point_j([-28,-379,195,-179,0.2,-179])
         # time.sleep(5)
-        # urController.run_point_j([175,-200,195,-179,0.2,-179])
+        # urController.run_point_j(RED_CAMERA)
+        # urController.run_point_j([175,-538,195,-179,0.2,-179])
         # time.sleep(5)
+        # urController.run_point_j(RED_CAMERA)
         # urController.run_point_j(BLACK_CAMERA)
         # time.sleep(5)
         # urController.run_point_j([125,-343,195,-179,0.2,-179])
         # time.sleep(5)
-        # urController.set_do(IO_QI, 0)  # 吸合123456
+        urController.set_do(IO_QI, 0)  # 吸合123456
 
-        urController.run_point_j(RCV_CAMERA)
+        # urController.run_point_j(RCV_CAMERA)
+        # time.sleep(3)
         # urController.wait_arrive(BLACK_CAMERA)
-        # urController.move_to(-123,-349.7,395.9)
+        # urController.move_to(-410.96, -299.49,260)
         # time.sleep(10)
         # urController.move_to(216, -596,250)
         # time.sleep(10)
         # urController.move_to(-350,-440,250)
         # time.sleep(10)
         # urController.move_to(-230,-440,210)
-        time.sleep(10)
+        # time.sleep(5)
         # print(urController.is_point_reachable(-400, -440,319)
 
         # time.sleep(100)

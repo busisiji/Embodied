@@ -13,9 +13,9 @@ from argparse import Namespace
 import logging
 from api.utils.decorators import handle_service_exceptions
 from api.utils.websocket_utils import send_error_notification_sync
+from runner.chessPlayFlow_runner import create_parser, ChessPlayFlow
 from src.cchessAI.core.frontend import get_active_window_ports
 
-# from runner.chessPlayFlow_runner import ChessPlayFlow
 # 配置日志
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ game_states = {}
 class ChessGameService:
     """
     中国象棋人机对弈服务类
-    封装chessPlayFlow_runner功能，提供标准API接口
+    封装chessPlayFlow功能，提供标准API接口
     """
 
     def __init__(self):
@@ -53,7 +53,7 @@ class ChessGameService:
                     event = self.game_events.get(timeout=1)
                     # 通过WebSocket发送事件到前端
                     try:
-                        send_error_notification_sync("chess_game", self.process_id or "unknown", json.dumps(event))
+                        send_error_notification_sync("chess_game", json.dumps(event), self.process_id or "unknown")
                     except Exception as e:
                         print(f"WebSocket事件发送失败: {e}")
                 time.sleep(0.1)
@@ -68,10 +68,7 @@ class ChessGameService:
         """
         创建参数命名空间对象
         """
-        # 导入chessPlayFlow_runner中的parser
-        from runner.chessPlayFlow_runner import create_parser
 
-        # 使用chessPlayFlow_runner中定义的parser
         parser = create_parser()
 
         # 解析空参数以获取默认值
@@ -100,7 +97,6 @@ class ChessGameService:
                 ...
         """
         try:
-            from runner.chessPlayFlow_runner import ChessPlayFlow
             if self.game_status == 'running':
                 return {
                     "success": False,
@@ -177,9 +173,9 @@ class ChessGameService:
                 "process_id": self.process_id,
                 'url':self.game_instance.game.get_window_url(),
                 "params": {
-                    "音响": self.game_instance.voice_engine is not None,
+                    "音响": True,
                     "机械臂": True,
-                    "相机": self.game_instance.pipeline is not None,
+                    "相机": True,
                     "识别模型": True,
                     "对弈模型": True
                 }

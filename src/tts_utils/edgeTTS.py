@@ -248,7 +248,25 @@ class EdgeTTSWrapper():
             text: 要播报的文本
         """
         processed_text = self.preprocess_text(text)
-        asyncio.run(self._async_speak(processed_text))
+
+        # 获取当前事件循环状态
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                # 在已有运行中的事件循环中，使用 run_until_complete
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    new_loop.run_until_complete(self._async_speak(processed_text))
+                finally:
+                    new_loop.close()
+                    asyncio.set_event_loop(loop)
+            else:
+                loop.run_until_complete(self._async_speak(processed_text))
+        except RuntimeError:
+            # 没有运行中的事件循环
+            asyncio.run(self._async_speak(processed_text))
+
 
     async def speak_async(self, text):
         """

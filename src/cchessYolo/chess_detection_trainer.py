@@ -1,6 +1,7 @@
 import argparse
 import shutil
 
+import onnx
 import pyrealsense2
 from ultralytics import YOLO
 import cv2
@@ -139,15 +140,48 @@ class ChessPieceDetectorSeparate():
 
         try:
             # 根据CUDA可用性选择执行提供者
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if torch.cuda.is_available() else ['CPUExecutionProvider']
-            self.onnx_session = ort.InferenceSession(onnx_path, providers=providers)
+            providers = []
+            if torch.cuda.is_available():
+                # 尝试不同的CUDA提供者
+                cuda_providers = [
+                    'CUDAExecutionProvider',
+                    'TensorrtExecutionProvider',  # 如果安装了TensorRT
+                    'CPUExecutionProvider'
+                ]
+                # 检查哪些提供者可用
+                available_providers = ort.get_available_providers()
+                for provider in cuda_providers:
+                    if provider in available_providers:
+                        providers.append(provider)
+                        break  # 只使用第一个可用的提供者
+            else:
+                providers = ['CPUExecutionProvider']
+
+            print(f"🔧 使用ONNX提供者: {providers}")
+
+            # 创建会话选项
+            sess_options = ort.SessionOptions()
+            sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+            sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            sess_options.intra_op_num_threads = 4  # 限制线程数以减少内存使用
+
+            self.onnx_session = ort.InferenceSession(
+                onnx_path,
+                sess_options=sess_options,
+                providers=providers
+            )
             print("✅ ONNX模型加载成功")
             return None
         except Exception as e:
             print(f"⚠️  ONNX模型加载失败: {e}")
             print("🔄 回退到标准PyTorch模型")
             self.is_onnx_model = False
-            model = YOLO(onnx_path.replace('.onnx', '.pt'))
+            # 尝试找到对应的.pt文件
+            pt_path = onnx_path.replace('.onnx', '.pt')
+            if not os.path.exists(pt_path):
+                # 如果没有.pt文件，使用默认的yolov8s.pt
+                pt_path = 'yolov8s.pt'
+            model = YOLO(pt_path)
             model.to(self.device)
             return model
 
@@ -183,43 +217,52 @@ class ChessPieceDetectorSeparate():
             model.to(self.device)
             return model(image)
 
-    def _onnx_inference(self, image):
+    def _onnx_inference(self, image_path,conf_threshold,iou_threshold):
         """
         使用ONNX模型执行推理
         """
         try:
-            # 预处理图像
-            input_name = self.onnx_session.get_inputs()[0].name
-            input_shape = self.onnx_session.get_inputs()[0].shape
-
-            # 如果是动态输入形状，使用640作为默认尺寸
-            if isinstance(input_shape[2], str) or isinstance(input_shape[3], str):
-                input_shape = [input_shape[0], input_shape[1], 640, 640]
-
-            processed_img = self._preprocess_image(image, input_shape)
-
-            # 执行推理
-            outputs = self.onnx_session.run(None, {input_name: processed_img.astype(np.float32)})
-
-            # 后处理结果
-            return self._postprocess_onnx_results(outputs, image.shape)
-
+            # 直接使用YOLO加载ONNX模型进行推理
+            model = YOLO(self.model_path)
+            results = model(
+                image_path,
+                conf=conf_threshold,
+                iou=iou_threshold,
+                imgsz=640,
+                save=False,
+                show=False,
+                device='cpu' if not torch.cuda.is_available() else 0
+            )
+            return  results
         except Exception as e:
-            print(f"⚠️  ONNX推理失败: {e}")
-            # 回退到标准YOLO推理
-            model = YOLO(self.model_path.replace('.onnx', '.pt'))
-            model.to(self.device)
-            return model(image)
+            print(f"⚠️  ONNX推理失败，回退到标准方法: {e}")
+
 
     def _preprocess_image(self, image, input_shape):
         """
         预处理图像以适配模型输入
         """
-        # 调整图像大小
-        resized = cv2.resize(image, (input_shape[2], input_shape[1]))
+        # 确保输入形状正确
+        if len(input_shape) == 4:
+            target_h, target_w = input_shape[2], input_shape[3]
+        else:
+            # 默认使用640x640
+            target_h, target_w = 640, 640
+
+        # 调整图像大小，保持宽高比
+        h, w = image.shape[:2]
+        scale = min(target_w/w, target_h/h)
+        new_w, new_h = int(w * scale), int(h * scale)
+
+        resized = cv2.resize(image, (new_w, new_h))
+
+        # 创建画布并居中放置图像
+        canvas = np.full((target_h, target_w, 3), 114, dtype=np.uint8)
+        pad_x, pad_y = (target_w - new_w) // 2, (target_h - new_h) // 2
+        canvas[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = resized
 
         # 转换颜色空间 (BGR to RGB)
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
 
         # 归一化
         normalized = rgb.astype(np.float32) / 255.0
@@ -245,21 +288,198 @@ class ChessPieceDetectorSeparate():
         standard_model = YOLO(self.model_path.replace('.trt', '.pt').replace('.engine', '.pt'))
         standard_model.to(self.device)
         return standard_model(np.zeros(original_shape, dtype=np.uint8))
-
     def _postprocess_onnx_results(self, onnx_outputs, original_shape):
         """
         后处理ONNX输出结果
         """
-        # 这里需要根据具体的ONNX模型输出格式进行调整
-        # 为保持兼容性，暂时回退到标准YOLO模型
-        print("⚠️  ONNX后处理未完全实现，回退到标准模型")
-        standard_model = YOLO(self.model_path.replace('.onnx', '.pt'))
-        standard_model.to(self.device)
-        return standard_model(np.zeros(original_shape, dtype=np.uint8))
+        try:
+            # ONNX模型输出通常是边界框、类别概率和置信度
+            # 假设输出格式为 [batch_size, num_boxes, 5 + num_classes]
+            # 其中5表示 [x, y, w, h, conf]，num_classes是类别数量
+
+            if not onnx_outputs or len(onnx_outputs) == 0:
+                print("⚠️  ONNX输出为空")
+                # 回退到标准YOLO模型
+                pt_path = self.model_path.replace('.onnx', '.pt')
+                if not os.path.exists(pt_path):
+                    pt_path = 'yolov8s.pt'
+                model = YOLO(pt_path)
+                model.to(self.device)
+                return model(np.zeros(original_shape, dtype=np.uint8))
+
+            # 获取输出数据（通常是边界框预测）
+            output_data = onnx_outputs[0]  # 取第一个输出
+
+            # 创建一个模拟的YOLO结果对象，使其与标准YOLO输出兼容
+            class DetectionResult:
+                def __init__(self, boxes):
+                    self.boxes = boxes
+
+            class Boxes:
+                def __init__(self, data):
+                    self.data = data
+                    self.xyxy = self._convert_xyxy()
+                    self.conf = self._extract_conf()
+                    self.cls = self._extract_cls()
+
+                def _convert_xyxy(self):
+                    # 如果输出是 [x_center, y_center, width, height] 格式，转换为 [x1, y1, x2, y2]
+                    if len(self.data.shape) >= 2 and self.data.shape[1] >= 4:
+                        xyxy = self.data.copy()
+                        # 转换 x_center, y_center, width, height -> x1, y1, x2, y2
+                        xyxy[:, 0] = self.data[:, 0] - self.data[:, 2] / 2  # x1 = x_center - width/2
+                        xyxy[:, 1] = self.data[:, 1] - self.data[:, 3] / 2  # y1 = y_center - height/2
+                        xyxy[:, 2] = self.data[:, 0] + self.data[:, 2] / 2  # x2 = x_center + width/2
+                        xyxy[:, 3] = self.data[:, 1] + self.data[:, 3] / 2  # y2 = y_center + height/2
+                        return xyxy
+                    return self.data
+
+                def _extract_conf(self):
+                    # 假设置信度是第5列（索引4）
+                    if len(self.data.shape) >= 2 and self.data.shape[1] >= 5:
+                        return self.data[:, 4:5]  # 保持二维形状
+                    return None
+
+                def _extract_cls(self):
+                    # 假设类别信息从第6列开始（索引5）
+                    if len(self.data.shape) >= 2 and self.data.shape[1] >= 6:
+                        # 获取最高概率的类别索引
+                        class_probs = self.data[:, 5:]
+                        return np.argmax(class_probs, axis=1).reshape(-1, 1)
+                    return None
+
+                def __len__(self):
+                    return len(self.data) if self.data is not None else 0
+
+                def __iter__(self):
+                    """实现迭代器接口，使Boxes对象可迭代"""
+                    # 创建一个简单的Box对象来模拟YOLO的box对象
+                    class Box:
+                        def __init__(self, data_row):
+                            self.data = data_row
+                            self.xyxy = self._extract_xyxy()
+                            self.conf = self._extract_conf()
+                            self.cls = self._extract_cls()
+
+                        def _extract_xyxy(self):
+                            class XYXY:
+                                def __init__(self, data):
+                                    self.data = data
+
+                                def __getitem__(self, idx):
+                                    return self.data[idx:idx+1] if idx == 0 else None
+
+                                def cpu(self):
+                                    class CPUWrapper:
+                                        def __init__(self, data):
+                                            self.data = data
+
+                                        def numpy(self):
+                                            return self.data
+                                    return CPUWrapper(self.data)
+
+                                def numpy(self):
+                                    return self.data
+                            return XYXY(self.data[0:4])
+
+                        def _extract_conf(self):
+                            class Conf:
+                                def __init__(self, conf_data):
+                                    self.data = conf_data
+
+                                def __getitem__(self, idx):
+                                    return self.data[idx:idx+1] if idx == 0 else None
+
+                                def cpu(self):
+                                    class CPUWrapper:
+                                        def __init__(self, data):
+                                            self.data = data
+
+                                        def numpy(self):
+                                            return self.data
+                                    return CPUWrapper(self.data)
+
+                                def numpy(self):
+                                    return self.data
+                            return Conf(self.data[4:5]) if len(self.data) >= 5 else None
+
+                        def _extract_cls(self):
+                            class Cls:
+                                def __init__(self, cls_data):
+                                    self.data = cls_data
+
+                                def __getitem__(self, idx):
+                                    return self.data[idx:idx+1] if idx == 0 else None
+
+                                def cpu(self):
+                                    class CPUWrapper:
+                                        def __init__(self, data):
+                                            self.data = data
+
+                                        def numpy(self):
+                                            return self.data
+                                    return CPUWrapper(self.data)
+
+                                def numpy(self):
+                                    return self.data
+                            return Cls(self.data[5:6]) if len(self.data) >= 6 else None
+
+                    # 为每个数据行创建Box对象
+                    for i in range(len(self.data)):
+                        yield Box(self.data[i])
+
+                def cpu(self):
+                    return self
+
+                def numpy(self):
+                    return self
+
+            # 处理输出数据
+            if len(output_data.shape) == 3:  # [batch, num_boxes, features]
+                # 取第一个批次的结果
+                boxes_data = output_data[0]
+            elif len(output_data.shape) == 2:  # [num_boxes, features]
+                boxes_data = output_data
+            else:
+                print(f"⚠️  不支持的ONNX输出形状: {output_data.shape}")
+                # 回退到标准YOLO模型
+                pt_path = self.model_path.replace('.onnx', '.pt')
+                if not os.path.exists(pt_path):
+                    pt_path = 'yolov8s.pt'
+                model = YOLO(pt_path)
+                model.to(self.device)
+                return model(np.zeros(original_shape, dtype=np.uint8))
+
+            # 过滤掉无效的边界框（可以添加更多的后处理逻辑）
+            # 这里简单地保留所有检测结果
+            valid_indices = np.where(np.any(boxes_data != 0, axis=1))[0]
+            filtered_boxes = boxes_data[valid_indices] if len(valid_indices) > 0 else boxes_data
+
+            # 创建Boxes对象
+            boxes_obj = Boxes(filtered_boxes)
+
+            # 创建DetectionResult对象
+            result_obj = DetectionResult(boxes_obj)
+
+            # 返回结果列表，模拟标准YOLO输出格式
+            return [result_obj]
+
+        except Exception as e:
+            print(f"⚠️  ONNX后处理失败: {e}")
+            import traceback
+            traceback.print_exc()
+            # 回退到标准YOLO模型
+            pt_path = self.model_path.replace('.onnx', '.pt')
+            if not os.path.exists(pt_path):
+                pt_path = 'yolov8s.pt'
+            model = YOLO(pt_path)
+            model.to(self.device)
+            return model(np.zeros(original_shape, dtype=np.uint8))
+
 
     def convert_to_trt(self, output_path=None, imgsz=640, half=True):
         """
-        将YOLO模型转换为TensorRT格式
+        将ONNX模型转换为TensorRT格式
 
         Args:
             output_path: 输出TensorRT模型路径
@@ -269,10 +489,14 @@ class ChessPieceDetectorSeparate():
         if not self.model_path.endswith('.pt'):
             print("❌  只有PyTorch模型(.pt)可以转换为TensorRT格式")
             return None
-
+        # 检查CUDA是否可用
+        if not torch.cuda.is_available():
+            print("❌  CUDA不可用，无法进行TensorRT转换")
+            return None
         if output_path is None:
             model_name = Path(self.model_path).stem
-            output_path = f"{model_name}.trt"
+            output_dir = Path(self.model_path).parent
+            output_path = str(output_dir / f"{model_name}.trt")
 
         try:
             # 使用ultralytics提供的导出功能
@@ -301,6 +525,7 @@ class ChessPieceDetectorSeparate():
             traceback.print_exc()
             return None
 
+
     def convert_to_onnx(self, output_path=None, imgsz=640, dynamic=False):
         """
         将YOLO模型转换为ONNX格式
@@ -315,26 +540,39 @@ class ChessPieceDetectorSeparate():
             return None
 
         if output_path is None:
+            # 保存在与.pt文件相同的路径下
             model_name = Path(self.model_path).stem
-            output_path = f"{model_name}.onnx"
+            output_dir = Path(self.model_path).parent
+            output_path = str(output_dir / f"{model_name}.onnx")
 
         try:
             # 使用ultralytics提供的导出功能
             model = YOLO(self.model_path)
 
-            # 导出为ONNX格式
-            model.export(
-                format='onnx',
-                imgsz=imgsz,
-                dynamic=dynamic,  # 是否支持动态输入尺寸
-                simplify=True,    # 简化模型
-                device=0 if torch.cuda.is_available() else 'cpu'
-            )
+            # 导出为ONNX格式，添加更多兼容性选项
+            export_args = {
+                'format': 'onnx',
+                'imgsz': imgsz,
+                'dynamic': False,  # 根据__main__中的设置改为False
+                'simplify': True,
+                'opset': 17,  # 使用与__main__中相同的opset版本
+                'device': 0 if torch.cuda.is_available() else 'cpu'
+            }
+
+            # 如果是CPU环境，添加额外的兼容性选项
+            if not torch.cuda.is_available():
+                export_args['opset'] = 11  # 更低的opset版本
+                export_args['half'] = False  # 禁用半精度
+
+            model.export(**export_args)
 
             # 重命名生成的文件
             generated_path = self.model_path.replace('.pt', '.onnx')
             if os.path.exists(generated_path):
                 os.rename(generated_path, output_path)
+
+            # 设置ONNX IR版本
+            self.set_onnx_ir_version(output_path)
 
             print(f"✅ 模型已成功转换为ONNX格式: {output_path}")
             return output_path
@@ -344,6 +582,23 @@ class ChessPieceDetectorSeparate():
             import traceback
             traceback.print_exc()
             return None
+
+    def set_onnx_ir_version(self, onnx_path, ir_version=8):
+        """
+        设置ONNX模型的IR版本
+
+        Args:
+            onnx_path: ONNX模型路径
+            ir_version: 目标IR版本
+        """
+        try:
+            model = onnx.load(onnx_path)
+            model.ir_version = ir_version
+            onnx.save(model, onnx_path)
+            print(f"✅ ONNX IR版本已设置为: {ir_version}")
+        except Exception as e:
+            print(f"⚠️  设置ONNX IR版本失败: {e}")
+
 
     def train(self, data_yaml='yaml/data.yaml', epochs=300, imgsz=640):
         """
@@ -376,20 +631,22 @@ class ChessPieceDetectorSeparate():
             return self.model_path.replace('.onnx', '.pt')
         return self.model_path
 
-    def _run_inference(self, image, conf_threshold=0.5, iou_threshold=0.25):
+    def _run_inference(self, image_path,image, conf_threshold=0.5, iou_threshold=0.25):
         """
         根据模型类型执行推理
         """
         if self.is_trt_model and TENSORRT_AVAILABLE:
             return self._trt_inference(image)
         elif self.is_onnx_model and ONNX_AVAILABLE:
-            return self._onnx_inference(image)
+            return self._onnx_inference(image_path, conf_threshold=0.5, iou_threshold=0.25)
         else:
             return self.model(image, conf=conf_threshold, iou=iou_threshold)
 
-    def detect(self, image_path, conf_threshold=0.5, iou_threshold=0.8, save_path='result.jpg'):
+    def detect(self, image_path, conf_threshold=0.3, iou_threshold=0.45, save_path='result.jpg'):
         """
         检测图像中的棋子并保存结果图片
+        根据__main__部分优化推理流程
+
         :param image_path: 输入图像路径
         :param conf_threshold: 置信度阈值
         :param iou_threshold: IOU 阈值
@@ -399,9 +656,8 @@ class ChessPieceDetectorSeparate():
         image = cv2.imread(image_path)
         if image is None:
             raise ValueError(f"无法读取图像: {image_path}")
-
         # 执行检测
-        results = self._run_inference(image, conf_threshold, iou_threshold)
+        results = self._run_inference(image_path,image, conf_threshold, iou_threshold)
 
         # 可视化检测结果
         vis_image = self.visualize_detections(image, results)
@@ -409,7 +665,6 @@ class ChessPieceDetectorSeparate():
         # 保存结果图像
         cv2.imwrite(save_path, vis_image)
         print(f"✅ 检测结果已保存至: {save_path}")
-
     def visualize_detections(self, image, results):
         """
         可视化检测结果（增加去重逻辑）
@@ -732,7 +987,7 @@ class ChessPieceDetectorSeparate():
 
             objects_info = filtered_detections
 
-        return objects_info
+        return objects_info, results
 
 
 
@@ -740,9 +995,9 @@ class ChessPieceDetectorSeparate():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', type=str,
-                        default='runs/detect/chess_piece_detection_separate7/weights/best.pt',
+                        default='runs/detect/chess_piece_detection_separate5/weights/best.pt',
                         help='模型路径 (.pt 或 .trt/.engine 或 .onnx)')
-    parser.add_argument('--convert_to', default='onnx', action='store_true',
+    parser.add_argument('--convert_to', default='trt', action='store_true',
                         help='将.pt模型转换为TensorRT/onnx格式')
     parser.add_argument('--imgsz', type=int, default=640,
                         help='输入图像尺寸')
@@ -752,33 +1007,65 @@ if __name__ == '__main__':
                         help='IOU阈值')
 
     args = parser.parse_args()
-
     # 创建检测器实例
-    detector = ChessPieceDetectorSeparate()
-    detector.train()
+    detector = ChessPieceDetectorSeparate(args.model_path)
+    # detector.train()
 
-    # # 如果需要转换模型为TensorRT
-    # if args.convert_to=='trt' and args.model_path.endswith('.pt'):
-    #     trt_model_path = detector.convert_to_trt(imgsz=args.imgsz)
-    #     if trt_model_path:
-    #         print(f"✅ 模型转换成功: {trt_model_path}")
-    #         detector = ChessPieceDetectorSeparate(trt_model_path)
-    #     else:
-    #         print("❌ 模型转换失败")
+    # 如果需要转换模型为TensorRT
+    if args.convert_to=='trt' and args.model_path.endswith('.pt'):
+        trt_model_path = detector.convert_to_trt(imgsz=args.imgsz)
+        if trt_model_path:
+            print(f"✅ 模型转换成功: {trt_model_path}")
+            detector = ChessPieceDetectorSeparate(trt_model_path)
+        else:
+            print("❌ 模型转换失败")
     #
-    # # 如果需要转换模型为ONNX
-    # elif args.convert_to=='onnx' and args.model_path.endswith('.pt'):
-    #     onnx_model_path = detector.convert_to_onnx(imgsz=args.imgsz)
-    #     if onnx_model_path:
-    #         print(f"✅ 模型转换成功: {onnx_model_path}")
-    #         detector = ChessPieceDetectorSeparate(onnx_model_path)
-    #     else:
-    #         print("❌ 模型转换失败")
+    # 如果需要转换模型为ONNX
+    elif args.convert_to=='onnx' and args.model_path.endswith('.pt'):
+        onnx_model_path = detector.convert_to_onnx(imgsz=args.imgsz)
+        if onnx_model_path:
+            print(f"✅ 模型转换成功: {onnx_model_path}")
+            detector = ChessPieceDetectorSeparate(onnx_model_path)
+        else:
+            print("❌ 模型转换失败")
+
+    # 执行检测
+    detector.detect(
+        "RS_20250913_114917.jpg",
+        conf_threshold=args.conf_threshold,
+        iou_threshold=args.iou_threshold,
+        save_path="result_with_keypoints.jpg"
+    )
+    # # 2. 导出ONNX模型（使用Ultralytics支持的参数）
+    # model = YOLO(args.model_path)
+    # model.export(
+    #     format="onnx",
+    #     opset=17,  # 指定Opset版本
+    #     simplify=True,  # 启用模型简化
+    #     imgsz=640,  # 固定输入尺寸
+    #     dynamic=False,  # 禁用动态维度
+    #     batch=1  # 单批次推理
+    # )
+    # #
+    # # 3. 后处理修改IR版本
+    # def set_onnx_ir_version(onnx_path, ir_version=8):
+    #     model = onnx.load(onnx_path)
+    #     model.ir_version = ir_version
+    #     onnx.save(model, onnx_path)
     #
-    # # 执行检测
-    # detector.detect(
-    #     "data/images/val/RS_20250730_111927.jpg",
-    #     conf_threshold=args.conf_threshold,
-    #     iou_threshold=args.iou_threshold,
-    #     save_path="result_with_keypoints.jpg"
+    #
+    # # 4. 修改导出的ONNX文件的IR版本
+    # set_onnx_ir_version(args.model_path)
+    #
+    # # 加载模型（显式指定任务类型）
+    # onnx_model = YOLO(args.model_path, task="detect")  # 关键修改：添加task参数
+    #
+    # # 运行本地图片推理（自动保存+显示）
+    # results = onnx_model(
+    #     "RS_20250913_114917.jpg",  # 改为你的本地图片
+    #     save=True,  # 自动保存结果到runs/detect/exp
+    #     show=True,  # 弹出结果窗口
+    #     conf=0.3,  # 调低置信度阈值提高召回率
+    #     imgsz=640,  # 指定推理尺寸（与导出时一致）
+    #     device='cpu'  # 强制使用CPU（如需GPU改为0）
     # )

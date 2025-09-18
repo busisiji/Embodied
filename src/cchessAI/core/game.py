@@ -341,7 +341,7 @@ class Game(object):
 
             # 如果启用 ComputerPlay 并且当前是 AI 下棋
             if use_computerplay and player_in_turn.agent == 'AI' :
-                from_x, from_y, to_x, to_y = algebraic_to_coordinates(move_uci)
+                from_x, from_y, to_x, to_y = uci_to_coordinates(move_uci)
                 move_uci = get_best_move_with_computer_play(maingame,self.board,from_x, from_y, to_x, to_y)
                 if move_uci:
                     print(f"[INFO] ComputerPlay 推荐走法: {move_uci}")
@@ -391,7 +391,7 @@ class Game(object):
             self.window.stop()
             self.window = None
 
-def algebraic_to_coordinates(move_str):
+def uci_to_coordinates(move_str):
     """
     将代数记谱法（如 c3c4）转换为以左上角为 (0, 0) 的坐标表示。
 

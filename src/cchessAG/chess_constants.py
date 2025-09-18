@@ -13,6 +13,16 @@ pao = 4
 xiang = 5
 shi = 6
 bing = 7
+poise_type = {
+    0: '无',
+    1: 'k',
+    2: 'r',
+    3: 'n',
+    4: 'c',
+    5: 'b',
+    6: 'a',
+    7: 'p'
+}
 # 初始化的棋盘
 init_borad = [
     [che, kong, kong, bing, kong, kong, bing, kong, kong, che],

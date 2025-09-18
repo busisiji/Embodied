@@ -12,7 +12,6 @@ from google.oauth2.id_token import verify_token
 from api.models.user_model import User
 from api.utils.exceptions import ResourceNotFoundException, InvalidInputException
 from api.utils.websocket_utils import send_error_notification_sync
-from test.user_api import get_user_by_id
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -149,7 +148,7 @@ def register_user(name: str, password: str, permission: str = "student") -> Dict
         if not name or not password:
             error_msg = "用户名和密码为必填项"
             logger.warning(error_msg)
-            send_error_notification_sync("auth_service", None, error_msg)
+            send_error_notification_sync("auth_service",  error_msg)
             raise InvalidInputException("Name and password are required")
 
         # 生成用户ID (user_ + 时间戳)
@@ -159,7 +158,7 @@ def register_user(name: str, password: str, permission: str = "student") -> Dict
         if User.get_or_none(User.name == name):
             error_msg = f"用户名 {name} 已存在"
             logger.warning(error_msg)
-            send_error_notification_sync("auth_service", None, error_msg)
+            send_error_notification_sync("auth_service",  error_msg)
             raise InvalidInputException(f"Username {name} already exists")
 
         # 哈希密码
@@ -189,7 +188,7 @@ def register_user(name: str, password: str, permission: str = "student") -> Dict
     except Exception as e:
         error_msg = f"注册用户失败: {str(e)}"
         logger.error(error_msg)
-        send_error_notification_sync("auth_service", None, error_msg)
+        send_error_notification_sync("auth_service",  error_msg)
         raise
 
 def login_user(name: str, password: str) -> Dict[str, Any]:
@@ -207,7 +206,7 @@ def login_user(name: str, password: str) -> Dict[str, Any]:
         if not name or not password:
             error_msg = "用户名和密码为必填项"
             logger.warning(error_msg)
-            send_error_notification_sync("auth_service", None, error_msg)
+            send_error_notification_sync("auth_service",  error_msg)
             raise InvalidInputException("Name and password are required")
 
         # 查找用户
@@ -215,7 +214,7 @@ def login_user(name: str, password: str) -> Dict[str, Any]:
         if not user:
             error_msg = f"用户 {name} 不存在"
             logger.warning(error_msg)
-            send_error_notification_sync("auth_service", None, error_msg)
+            send_error_notification_sync("auth_service",  error_msg)
             raise ResourceNotFoundException("User")
 
         # 验证密码
@@ -224,13 +223,13 @@ def login_user(name: str, password: str) -> Dict[str, Any]:
             if not verify_password(stored_password, salt, password):
                 error_msg = f"密码错误"
                 logger.warning(error_msg)
-                send_error_notification_sync("auth_service", None, error_msg)
+                send_error_notification_sync("auth_service",  error_msg)
                 raise InvalidInputException("Invalid password")
         else:
             # 兼容旧数据格式
             error_msg = f"用户密码格式错误"
             logger.error(error_msg)
-            send_error_notification_sync("auth_service", None, error_msg)
+            send_error_notification_sync("auth_service",  error_msg)
             raise InvalidInputException("Invalid password format")
 
         # 创建会话
@@ -249,7 +248,7 @@ def login_user(name: str, password: str) -> Dict[str, Any]:
     except Exception as e:
         error_msg = f"用户登录失败: {str(e)}"
         logger.error(error_msg)
-        send_error_notification_sync("auth_service", None, error_msg)
+        send_error_notification_sync("auth_service",  error_msg)
         raise
 
 def logout_user(token: str) -> Dict[str, str]:
@@ -270,7 +269,7 @@ def logout_user(token: str) -> Dict[str, str]:
     except Exception as e:
         error_msg = f"用户登出失败: {str(e)}"
         logger.error(error_msg)
-        send_error_notification_sync("auth_service", None, error_msg)
+        send_error_notification_sync("auth_service",  error_msg)
         raise
 
 
@@ -500,5 +499,5 @@ def logout_user_all_sessions(user_id: str) -> Dict[str, str]:
     except Exception as e:
         error_msg = f"用户登出所有会话失败: {str(e)}"
         logger.error(error_msg)
-        send_error_notification_sync("auth_service", None, error_msg)
+        send_error_notification_sync("auth_service",  error_msg)
         raise

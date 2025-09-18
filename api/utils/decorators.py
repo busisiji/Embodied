@@ -35,7 +35,7 @@ def handle_service_exceptions(process_type: str = "system", include_websocket_no
                 # 发送WebSocket错误通知（如果启用）
                 if include_websocket_notify:
                     try:
-                        send_error_notification_sync(process_type, None, error_msg)
+                        send_error_notification_sync(process_type,  error_msg)
                     except Exception as ws_error:
                         logger.warning(f"发送WebSocket通知失败: {str(ws_error)}")
 
@@ -103,7 +103,7 @@ def _process_result_common(result, func, process_type, **kwargs):
 
             # 发送WebSocket错误通知
             try:
-                send_error_notification_sync(process_type, None, error_msg)
+                send_error_notification_sync(process_type,  error_msg)
             except Exception as ws_error:
                 logger.warning(f"发送WebSocket通知失败: {str(ws_error)}")
 
@@ -139,7 +139,7 @@ def _handle_exception(e, func, process_type):
 
         # 发送WebSocket错误通知
         try:
-            send_error_notification_sync(process_type, None, error_msg)
+            send_error_notification_sync(process_type,  error_msg)
         except Exception as ws_error:
             logger.warning(f"发送WebSocket通知失败: {str(ws_error)}")
 
@@ -160,7 +160,7 @@ def _handle_exception(e, func, process_type):
 
         # 发送WebSocket错误通知
         try:
-            send_error_notification_sync(process_type, None, error_msg)
+            send_error_notification_sync(process_type,  error_msg)
         except Exception as ws_error:
             logger.warning(f"发送WebSocket通知失败: {str(ws_error)}")
 
@@ -181,7 +181,7 @@ def _handle_exception(e, func, process_type):
 
         # 发送WebSocket错误通知
         try:
-            send_error_notification_sync(process_type, None, error_msg)
+            send_error_notification_sync(process_type,  error_msg)
         except Exception as ws_error:
             logger.warning(f"发送WebSocket通知失败: {str(ws_error)}")
 
