@@ -68,5 +68,10 @@ SAC_H_LAY = 0.29
 IO_SIDE = 6 # 用户
 IO_DEN = [4,5] # 绿，红
 IO_QI = 6 # 吸气
+IO_START = 1 # 启动
+IO_STOP = 2 # 停止
+IO_RESET = 3 # 复位
+
+
 
 POINT_TEST = [-130.066,-554.630, 395.9,-179, 0, -179]

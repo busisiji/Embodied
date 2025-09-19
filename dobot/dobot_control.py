@@ -886,45 +886,6 @@ class URController:
             print(f"🔌 设置DO[{io_index}] = {value}")
             return True
         return False
-    # def set_do(self, io_index, value, callback=None):
-    #     """
-    #     异步设置数字输出
-    #
-    #     @param io_index: IO索引
-    #     @param value: 设置值 (0或1)
-    #     @param callback: 回调函数 (io_index, value, success) -> None
-    #     @return: Future对象
-    #     """
-    #
-    #     def _set_do_task():
-    #         try:
-    #             result = self._execute_with_dashboard(
-    #                 lambda: self.dashboard.DO(io_index, value),
-    #                 description=f"设置DO[{io_index}] = {value}"
-    #             )
-    #             success = result is not None
-    #             if success:
-    #                 print(f"🔌 设置DO[{io_index}] = {value}")
-    #
-    #             # 执行回调
-    #             if callback:
-    #                 try:
-    #                     callback(io_index, value, success)
-    #                 except Exception as e:
-    #                     print(f"⚠️ 回调函数执行失败: {e}")
-    #
-    #             return success
-    #         except Exception as e:
-    #             print(f"❌ 异步设置DO[{io_index}]失败: {str(e)}")
-    #             if callback:
-    #                 try:
-    #                     callback(io_index, value, False)
-    #                 except Exception as cb_e:
-    #                     print(f"⚠️ 回调函数执行失败: {cb_e}")
-    #             return False
-    #
-    #     return self.executor.submit(_set_do_task)
-
 
     def get_di(self, io_index,is_log=True):
         """获取数字输入"""
@@ -1353,37 +1314,42 @@ class URController:
         )
         return result
 
-    def hll(self, f_4=0, f_5=0):
+    def hll(self,i=-1,dos=[4,5]):
         """
         异步设置DO[4]和DO[5]的状态
         @param f_4: DO[4]的值 (0或1)
         @param f_5: DO[5]的值 (0或1)
         @return: Future对象
         """
-        def _hll_task():
-            try:
-                # 设置DO[4]
-                result_4 = self._execute_with_dashboard(
-                    lambda: self.dashboard.DO(4, f_4),
-                    description=f"设置DO[4] = {f_4}"
-                )
-
-                # 设置DO[5]
-                result_5 = self._execute_with_dashboard(
-                    lambda: self.dashboard.DO(5, f_5),
-                    description=f"设置DO[5] = {f_5}"
-                )
-
-                success = (result_4 is not None and result_5 is not None)
-                if success:
-                    print(f"🔌 已设置 DO[4]={f_4}, DO[5]={f_5}")
-
-                return success
-            except Exception as e:
-                print(f"❌ 异步设置DO[4]和DO[5]失败: {str(e)}")
-                return False
-
-        return self.executor.submit(_hll_task)
+        for do in dos:
+            if do != i :
+                self.set_do(do, 0)
+            else:
+                self.set_do(i, 1)
+        # def _hll_task():
+        #     try:
+        #         # 设置DO[4]
+        #         result_4 = self._execute_with_dashboard(
+        #             lambda: self.dashboard.DO(4, f_4),
+        #             description=f"设置DO[4] = {f_4}"
+        #         )
+        #
+        #         # 设置DO[5]
+        #         result_5 = self._execute_with_dashboard(
+        #             lambda: self.dashboard.DO(5, f_5),
+        #             description=f"设置DO[5] = {f_5}"
+        #         )
+        #
+        #         success = (result_4 is not None and result_5 is not None)
+        #         if success:
+        #             print(f"🔌 已设置 DO[4]={f_4}, DO[5]={f_5}")
+        #
+        #         return success
+        #     except Exception as e:
+        #         print(f"❌ 异步设置DO[4]和DO[5]失败: {str(e)}")
+        #         return False
+        #
+        # return self.executor.submit(_hll_task)
 
 
     def get_io_status_range(self, start_index, end_index):
@@ -1620,6 +1586,21 @@ def point_test_sac(urController):
     urController.run_point_j(SAC_CAMERA)
     urController.wait_arrive(SAC_CAMERA)
 
+def get_dis(urController,start_i,end_i):
+    while 1:
+        for i in range(start_i,end_i):
+            di = urController.get_di(i, is_log=False)
+            if di == 1:
+                print(i,di)
+        time.sleep(1)
+
+def get_dos(urController,start_i,end_i):
+    while 1:
+        for i in range(start_i,end_i):
+            dos = urController.set_do(i, 1)
+            print(i,dos)
+            time.sleep(3)
+
 
 if __name__ == "__main__":
     # # 使用新的连接和检查函数
@@ -1641,7 +1622,7 @@ if __name__ == "__main__":
         # time.sleep(5)
         # urController.run_point_j([125,-343,195,-179,0.2,-179])
         # time.sleep(5)
-        urController.set_do(IO_QI, 0)  # 吸合123456
+        # urController.set_do(IO_QI, 0)  # 吸合123456
 
         # urController.run_point_j(RCV_CAMERA)
         # time.sleep(3)
@@ -1658,6 +1639,14 @@ if __name__ == "__main__":
 
         # time.sleep(100)
         # alarm_handling_test(urController)
+        # get_dis(urController,1,40)
+        # get_dos(urController,1,23)
+        urController.set_do(5, 1)
+        time.sleep(3)
+        urController.set_do(5, 0)
+        time.sleep(3)
+        urController.set_do(4, 0)
+
         # 断开连接
         urController.disconnect()
     else:

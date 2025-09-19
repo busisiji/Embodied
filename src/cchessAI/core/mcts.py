@@ -142,6 +142,8 @@ class MCTS():
 
     def get_move_probs(self, board, temp=1e-3, is_evaluator=False):
         total_time = 0.0
+        playout_start_time = time.time()
+
         for i in range(self.n_playout):
             start_time = time.time()
             board_copy = board.copy()
@@ -149,50 +151,107 @@ class MCTS():
             elapsed = time.time() - start_time
             total_time += elapsed
 
+        playout_total_time = time.time() - playout_start_time
+
         if IS_DEBUG:
             print(f"[INFO] 总模拟耗时：{total_time:.4f} 秒，平均每次：{total_time / self.n_playout:.6f} 秒")
-        start_time = time.time()
+            print(f"[INFO] 模拟循环总耗时（包含循环开销）：{playout_total_time:.4f} 秒")
 
+        processing_start_time = time.time()
+
+        act_visits_start_time = time.time()
         act_visits = [(act, node.visits) for act, node in self.root.children.items()]
-        acts, visits = zip(*act_visits)
-        visits = np.array(visits)
-        vi_logits = np.log(visits + 1e-10)
-        m = 4  # 奖惩权重
-        logits = vi_logits
+        act_visits_time = time.time() - act_visits_start_time
 
-        if is_evaluator:
-            # 使用辅助算法 + 缓存机制
-            # 获取访问次数最高的前5个动作索引
-            vitop_5_indices = self.get_top_n_within_threshold(vi_logits, threshold=0.9*m)
-            vitop_5_acts = [acts[i] for i in vitop_5_indices]
-            # 只对这5个动作进行威胁与奖励计算
-            evaluator = ThreatEvaluator()
-            eat_rewards_top5, threat_penalties_top5 = evaluator.calculate_eat_rewards_and_threats(board, vitop_5_acts,
-                                                                                                  threat_depth=1)
-            # 构造一个完整的 eat_rewards/threat_penalties 列表，其余为0
-            eat_rewards = np.zeros_like(vi_logits)
-            threat_penalties = np.zeros_like(vi_logits)
-            for idx_in_all, top5_idx in enumerate(vitop_5_indices):
-                eat_rewards[top5_idx] = eat_rewards_top5[idx_in_all]
-                threat_penalties[top5_idx] = threat_penalties_top5[idx_in_all]
-            print(f"[INFO] 辅助算法耗时：{time.time() - start_time:.4f} 秒")
-            logits = logits + (eat_rewards + threat_penalties) * m
+        if act_visits:
+            acts, visits = zip(*act_visits)
+            visits = np.array(visits)
 
-        logits = 1.0 / temp * logits
-        act_probs = softmax(logits)
+            log_start_time = time.time()
+            vi_logits = np.log(visits + 1e-10)
+            log_time = time.time() - log_start_time
 
-        # 可视化 top5 动作
-        indexed_actions = list(enumerate(zip(acts, act_probs,logits)))
-        sorted_with_indices = sorted(indexed_actions, key=lambda x: x[1][2], reverse=True)
-        if IS_DEBUG:
-            print("[DEBUG] Top 5 动作及原始索引:")
-            for idx, (act, prob,logit) in sorted_with_indices[:5]:
-                if is_evaluator:
-                    print(f"Index {idx}: 落子： {move_id2move_action[act]} 访问次数：{visits[idx]} 访问概率：{np.round(vi_logits[idx],2)} 吃子奖励: {eat_rewards[idx]}, 威胁惩罚：{np.round(threat_penalties[idx],2)},奖惩系数{m}， 概率: {prob:.4f}")
+            m = 4  # 奖惩权重
+            logits = vi_logits
+
+            if is_evaluator:
+                # 使用辅助算法 + 缓存机制
+                threat_start_time = time.time()
+
+                # 获取访问次数最高的前5个动作索引
+                vitop_5_indices_start = time.time()
+                vitop_5_indices = self.get_top_n_within_threshold(vi_logits, threshold=0.9*m)
+                vitop_5_indices_time = time.time() - vitop_5_indices_start
+
+                if vitop_5_indices:
+                    vitop_5_acts = [acts[i] for i in vitop_5_indices]
+
+                    # 只对这5个动作进行威胁与奖励计算
+                    evaluator_start_time = time.time()
+                    evaluator = ThreatEvaluator()
+                    eat_rewards_top5, threat_penalties_top5 = evaluator.calculate_eat_rewards_and_threats(board, vitop_5_acts,
+                                                                                                          threat_depth=1)
+                    evaluator_time = time.time() - evaluator_start_time
+
+                    # 构造一个完整的 eat_rewards/threat_penalties 列表，其余为0
+                    array_construction_start_time = time.time()
+                    eat_rewards = np.zeros_like(vi_logits)
+                    threat_penalties = np.zeros_like(vi_logits)
+                    for idx_in_all, top5_idx in enumerate(vitop_5_indices):
+                        eat_rewards[top5_idx] = eat_rewards_top5[idx_in_all]
+                        threat_penalties[top5_idx] = threat_penalties_top5[idx_in_all]
+                    array_construction_time = time.time() - array_construction_start_time
+
+                    threat_total_time = time.time() - threat_start_time
+                    print(f"[INFO] 辅助算法耗时：{threat_total_time:.4f} 秒")
+                    print(f"  - 获取Top动作耗时: {vitop_5_indices_time:.4f} 秒")
+                    print(f"  - 威胁评估耗时: {evaluator_time:.4f} 秒")
+                    print(f"  - 数组构建耗时: {array_construction_time:.4f} 秒")
+
+                    logits = logits + (eat_rewards + threat_penalties) * m
                 else:
-                    print(f"Index {idx}: 落子： {move_id2move_action[act]} 访问次数：{visits[idx]} 访问概率：{np.round(vi_logits[idx],2)}, 概率: {prob:.4f}")
+                    print("[INFO] 未找到Top动作，跳过威胁评估")
+            else:
+                threat_total_time = 0
 
-        return acts, act_probs
+            softmax_start_time = time.time()
+            logits = 1.0 / temp * logits
+            act_probs = softmax(logits)
+            softmax_time = time.time() - softmax_start_time
+
+            # 可视化 top5 动作
+            sort_start_time = time.time()
+            indexed_actions = list(enumerate(zip(acts, act_probs, logits)))
+            sorted_with_indices = sorted(indexed_actions, key=lambda x: x[1][2], reverse=True)
+            sort_time = time.time() - sort_start_time
+
+            processing_total_time = time.time() - processing_start_time
+
+            if IS_DEBUG:
+                print("[DEBUG] 处理阶段各步骤耗时分析:")
+                print(f"  - 获取动作访问次数: {act_visits_time:.4f} 秒")
+                print(f"  - 对数计算: {log_time:.4f} 秒")
+                print(f"  - Softmax计算: {softmax_time:.4f} 秒")
+                print(f"  - 排序: {sort_time:.4f} 秒")
+                print(f"  - 威胁评估总耗时: {threat_total_time:.4f} 秒")
+                print(f"  - 处理阶段总耗时: {processing_total_time:.4f} 秒")
+                print(f"  - 整体函数总耗时: {playout_total_time + processing_total_time:.4f} 秒")
+
+                print("[DEBUG] Top 5 动作及原始索引:")
+                for idx, (act, prob, logit) in sorted_with_indices[:5]:
+                    if is_evaluator and 'eat_rewards' in locals() and 'threat_penalties' in locals():
+                        print(f"Index {idx}: 落子： {move_id2move_action[act]} 访问次数：{visits[idx]} 访问概率：{np.round(vi_logits[idx],2)} 吃子奖励: {eat_rewards[idx]}, 威胁惩罚：{np.round(threat_penalties[idx],2)},奖惩系数{m}， 概率: {prob:.4f}")
+                    else:
+                        print(f"Index {idx}: 落子： {move_id2move_action[act]} 访问次数：{visits[idx]} 访问概率：{np.round(vi_logits[idx],2)}, 概率: {prob:.4f}")
+
+            return acts, act_probs
+        else:
+            # 处理没有子节点的情况
+            processing_total_time = time.time() - processing_start_time
+            if IS_DEBUG:
+                print(f"[WARN] 没有可用的动作，处理耗时: {processing_total_time:.4f} 秒")
+            return [], []
+
 
 
     def update_with_move(self, last_move):

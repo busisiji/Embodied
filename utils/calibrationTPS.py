@@ -7,7 +7,7 @@ from parameters import CHESS_POINTS_R, WORLD_POINTS_R, CHESS_POINTS_B, WORLD_POI
     CHESS_POINTS_RCV_L
 
 
-class TPSTransform:
+class TPSTransform():
     """
     Thin Plate Spline 变换类
     """

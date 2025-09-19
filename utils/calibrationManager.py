@@ -278,7 +278,7 @@ def camera_to_chess_position( camera_x, camera_y, chess_ponts):
 
     return (row, col)
 
-def multi_camera_pixel_to_world(pixel_x, pixel_y, inverse_matrix, camera_type="RED_CAMERA"):
+def multi_camera_pixel_to_world(pixel_x, pixel_y, inverse_matrix, camera_type="RED_CAMERA",use_tps=False):
     """
     将任意拍照点的像素坐标转换为世界坐标
     流程：其他拍照点像素 -> RED_CAMERA像素 -> 世界坐标
@@ -293,7 +293,7 @@ def multi_camera_pixel_to_world(pixel_x, pixel_y, inverse_matrix, camera_type="R
         tuple: (world_x, world_y) 世界坐标
     """
     # RED_CAMERA像素坐标转换为世界坐标
-    world_x, world_y = pixel_to_world(pixel_x, pixel_y, inverse_matrix, camera_type=camera_type)
+    world_x, world_y = pixel_to_world(pixel_x, pixel_y, inverse_matrix, camera_type=camera_type,use_tps=use_tps)
 
     # 如果是RED_CAMERA或BLACK_CAMERA，直接返回
     if camera_type in ["RED_CAMERA", "BLACK_CAMERA","RCV_CAMERA"]:

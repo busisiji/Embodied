@@ -995,9 +995,9 @@ class ChessPieceDetectorSeparate():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', type=str,
-                        default='runs/detect/chess_piece_detection_separate5/weights/best.pt',
+                        default='runs/detect/chess_piece_detection_separate/weights/best.pt',
                         help='模型路径 (.pt 或 .trt/.engine 或 .onnx)')
-    parser.add_argument('--convert_to', default='trt', action='store_true',
+    parser.add_argument('--convert_to', default='onnx', action='store_true',
                         help='将.pt模型转换为TensorRT/onnx格式')
     parser.add_argument('--imgsz', type=int, default=640,
                         help='输入图像尺寸')
@@ -1036,36 +1036,3 @@ if __name__ == '__main__':
         iou_threshold=args.iou_threshold,
         save_path="result_with_keypoints.jpg"
     )
-    # # 2. 导出ONNX模型（使用Ultralytics支持的参数）
-    # model = YOLO(args.model_path)
-    # model.export(
-    #     format="onnx",
-    #     opset=17,  # 指定Opset版本
-    #     simplify=True,  # 启用模型简化
-    #     imgsz=640,  # 固定输入尺寸
-    #     dynamic=False,  # 禁用动态维度
-    #     batch=1  # 单批次推理
-    # )
-    # #
-    # # 3. 后处理修改IR版本
-    # def set_onnx_ir_version(onnx_path, ir_version=8):
-    #     model = onnx.load(onnx_path)
-    #     model.ir_version = ir_version
-    #     onnx.save(model, onnx_path)
-    #
-    #
-    # # 4. 修改导出的ONNX文件的IR版本
-    # set_onnx_ir_version(args.model_path)
-    #
-    # # 加载模型（显式指定任务类型）
-    # onnx_model = YOLO(args.model_path, task="detect")  # 关键修改：添加task参数
-    #
-    # # 运行本地图片推理（自动保存+显示）
-    # results = onnx_model(
-    #     "RS_20250913_114917.jpg",  # 改为你的本地图片
-    #     save=True,  # 自动保存结果到runs/detect/exp
-    #     show=True,  # 弹出结果窗口
-    #     conf=0.3,  # 调低置信度阈值提高召回率
-    #     imgsz=640,  # 指定推理尺寸（与导出时一致）
-    #     device='cpu'  # 强制使用CPU（如需GPU改为0）
-    # )
