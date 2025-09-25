@@ -664,44 +664,6 @@ async def list_available_params(current_user: User = Depends(get_current_user_fr
         )
 
 
-@router.post("/jog/start", status_code=status.HTTP_200_OK)
-@handle_route_exceptions("dobot")
-@format_response()
-async def start_jog(request: JogStartRequest, current_user: User = Depends(get_current_user_from_request)):
-    """
-    开始点动运动
-    仅管理员可以操作
-    """
-    try:
-        controller = get_dobot_controller()
-        if not controller.connected:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="机械臂未连接"
-            )
-
-        success = controller.start_jog(
-            axis_id=request.axis_id,
-            coord_type=request.coord_type,
-            user=request.user,
-            tool=request.tool
-        )
-
-        if success:
-            return format_response_data({
-                "message": f"开始点动运动: {request.axis_id}"
-            })
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="开始点动运动失败"
-            )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"开始点动运动失败: {str(e)}"
-        )
-
 @router.post("/jog/stop", status_code=status.HTTP_200_OK)
 @handle_route_exceptions("dobot")
 @format_response()

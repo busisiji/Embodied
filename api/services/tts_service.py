@@ -39,7 +39,7 @@ class TTSManager:
         self.was_listening = False
         self.is_network_available = True
         # asyncio.run(self._check_network_async())
-
+        self.tts_cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../src/tts_utils/tts_cache")
     def _check_network(self):
         """
         检查网络连接状态
@@ -113,6 +113,47 @@ class TTSManager:
                 print("⚠️  Piper TTS 不可用，将使用 Ekho TTS 作为离线语音引擎")
 
             self.tts_engine = None
+
+    async def _play_cached_audio_if_exists(self, text):
+        """
+        检查是否有缓存的音频文件，如果有则直接播放
+
+        Args:
+            text (str): 要播报的文本
+
+        Returns:
+            bool: 是否找到并播放了缓存音频
+        """
+        try:
+            # 根据文本生成文件名（这里简单地用文本作为文件名，实际可能需要更复杂的处理）
+            filename = f"{text}.wav"
+            cache_file_path = os.path.join(self.tts_cache_dir, filename)
+
+            if os.path.exists(cache_file_path):
+                # 如果找到缓存文件，先尝试使用Edge TTS播报
+                if self.is_network_available and (self.system == "windows" or (self.system == "linux" and self.is_network_available)):
+                    try:
+                        print(f"使用Edge TTS播报缓存内容: {text}")
+                        await self._speak_with_edge_tts_async(text)
+                        return True
+                    except Exception as e:
+                        print(f"Edge TTS播报失败，回退到本地播放: {e}")
+
+                # 如果Edge TTS不可用或失败，则直接播放缓存的音频文件
+                print(f"播放缓存音频: {cache_file_path}")
+
+                # 使用系统命令或音频库播放缓存的音频文件
+                # 这里需要根据实际使用的音频播放库进行调整
+                import subprocess
+                process = await asyncio.create_subprocess_exec("aplay", cache_file_path)  # Linux示例
+                # Windows可以使用 'powershell' 和 ' MediaPlayer.MediaPlayer' 或其他方式
+                await process.communicate()
+
+                return True
+        except Exception as e:
+            print(f"播放缓存音频失败: {e}")
+
+        return False
 
     def set_speech_recognizer(self, recognizer):
         """
@@ -225,6 +266,7 @@ class TTSManager:
         except Exception as e:
             print(f"❌ 启动语音队列处理器失败: {e}")
             return False
+
     async def _speak_text(self, text):
         """
         实际执行文本播报的逻辑
@@ -242,22 +284,23 @@ class TTSManager:
         await asyncio.sleep(0.1)
 
         try:
-            # 异步检查网络状态
-            asyncio.create_task(self._check_network_async())
-            print(f"网络状态: {'可用' if self.is_network_available else '不可用'}")
+            if not await self._play_cached_audio_if_exists(text):
+                # 异步检查网络状态
+                asyncio.create_task(self._check_network_async())
+                print(f"网络状态: {'可用' if self.is_network_available else '不可用'}")
 
-            if self.system == "windows":
-                # Windows系统始终使用Edge TTS
-                await self._speak_with_edge_tts_async(text)
-            elif self.system == "linux" and self.is_network_available:
-                # Linux系统且网络可用时使用Edge TTS
-                await self._speak_with_edge_tts_async(text)
-            elif self.piper_available:
-                # 使用Piper TTS
-                await self._fallback_to_piper_async(text)
-            else:
-                # 使用 Ekho TTS 作为最后的备选方案
-                await self._fallback_to_ekho_async(text)
+                if self.system == "windows":
+                    # Windows系统始终使用Edge TTS
+                    await self._speak_with_edge_tts_async(text)
+                elif self.system == "linux" and self.is_network_available:
+                    # Linux系统且网络可用时使用Edge TTS
+                    await self._speak_with_edge_tts_async(text)
+                elif self.piper_available:
+                    # 使用Piper TTS
+                    await self._fallback_to_piper_async(text)
+                else:
+                    # 使用 Ekho TTS 作为最后的备选方案
+                    await self._fallback_to_ekho_async(text)
         except Exception as e:
             print(f"TTS执行异常: {e}")
             if self.speech_recognizer:

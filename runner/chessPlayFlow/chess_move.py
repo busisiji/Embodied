@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import os
+import threading
 import time
 
 import cv2
@@ -113,7 +114,12 @@ class ChessPlayFlowMove():
 
         # 检查目标位置及周围位置的偏差，如果有偏差超过容忍度则不断重新检查直到没有偏差为止
         print("🔍 检查目标位置及周围棋子位置偏差...")
-        while not self.check_target_position_and_surroundings(from_row,from_col,to_row,to_col):
+        while not self.check_target_position_and_surroundings(from_row, from_col, to_row, to_col):
+            # 检查游戏状态
+            surrendered, paused = self.parent.check_game_state()
+            if surrendered:
+                return
+
             if self.parent.surrendered:
                 return
             if to_row <= 4:
@@ -122,7 +128,7 @@ class ChessPlayFlowMove():
                 half_board = 'black'
             self.wait_for_player_adjustment(half_board=half_board)
 
-                # 检查是否投降
+            # 检查是否投降
             if self.parent.surrendered:
                 self.parent.gama_over('surrender')
                 return
@@ -171,19 +177,48 @@ class ChessPlayFlowMove():
                 'position': (to_row_idx, to_col)
             }
 
-            # 移动被吃的棋子到弃子区
-            self.move_piece_to_area(to_row_idx, to_col)
+            # 移动被吃的棋子到弃子区（异步执行）
+            def move_captured_piece_task():
+                self.move_piece_to_area(to_row_idx, to_col)
 
-        # 移动棋子
-        self.point_move([from_x_world, from_y_world, pick_height],
-                        [to_x_world, to_y_world, pick_height],
-                        [from_row, to_row])
+            capture_thread = threading.Thread(target=move_captured_piece_task, daemon=True)
+            capture_thread.start()
 
-        # 回到初始位置
-        print("🏠 返回初始位置")
-#         self.parent.urController.set_speed(0.5)
-        self.move_home()
-        print("✅ 移动执行完成")
+            # 等待移动完成，同时检查游戏状态
+            while capture_thread.is_alive():
+                if self.parent.surrendered:
+                    return
+                time.sleep(0.01)
+
+        # 移动棋子（异步执行）
+        def move_piece_task():
+            self.point_move([from_x_world, from_y_world, pick_height],
+                            [to_x_world, to_y_world, pick_height],
+                            [from_row, to_row])
+
+        move_thread = threading.Thread(target=move_piece_task, daemon=True)
+        move_thread.start()
+
+        # 等待移动完成，同时检查游戏状态
+        while move_thread.is_alive():
+            if self.parent.surrendered:
+                return
+            time.sleep(0.01)
+
+        # 回到初始位置（异步执行）
+        def home_task():
+            print("🏠 返回初始位置")
+            self.move_home()
+            print("✅ 移动执行完成")
+
+        home_thread = threading.Thread(target=home_task, daemon=True)
+        home_thread.start()
+
+        # 等待回家完成，同时检查游戏状态
+        while home_thread.is_alive():
+            if self.parent.surrendered:
+                return
+            time.sleep(0.01)
 
         if self.parent.args.use_api:
             # 报告机器人移动
@@ -501,7 +536,7 @@ class ChessPlayFlowMove():
             # 执行移动到MainGame并保存历史信息
 
             # 更新棋盘状态
-            self.parent.maingame.mgInit.move_to(self.parent.cBranch.uci_to_mg_coords(move_uci))
+            self.parent.maingame.mgInit.move_to(self.parent.cUtils.uci_to_mg_coords(move_uci))
             self.parent.board.push(move)
             self.updat_previous_positions_after_move(move_uci)
             # 记录移动历史

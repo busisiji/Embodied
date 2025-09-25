@@ -57,7 +57,7 @@ def synthesize_and_play(text, cache_dir="tts_cache"):
         cache_dir (str): 缓存目录路径
     """
     # 创建缓存目录
-    cache_dir =os.path.join(current_dir, cache_dir)
+    cache_dir = os.path.join(current_dir, cache_dir)
     if not os.path.exists(cache_dir):
         os.makedirs( cache_dir)
 

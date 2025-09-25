@@ -789,6 +789,7 @@ class ChessPieceDetectorSeparate():
                 cv2.putText(img_vis, str(i), (int(x)+10, int(y)+10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
+
             # 绘制棋盘边界框
             pts = np.array(fixed_points, np.int32)
             pts = pts.reshape((-1, 1, 2))

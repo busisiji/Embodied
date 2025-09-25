@@ -1,127 +1,223 @@
 import socket
+import time
 from threading import Timer
 from tkinter import Text, END
 import datetime
 import numpy as np
 
 # Port Feedback
-MyType = np.dtype([(
-    'len',
-    np.int64,
-), (
-    'digital_input_bits',
-    np.uint64,
-), (
-    'digital_output_bits',
-    np.uint64,
-), (
-    'robot_mode',
-    np.uint64,
-), (
-    'time_stamp',
-    np.uint64,
-), (
-    'time_stamp_reserve_bit',
-    np.uint64,
-), (
-    'test_value',
-    np.uint64,
-), (
-    'test_value_keep_bit',
-    np.float64,
-), (
-    'speed_scaling',
-    np.float64,
-), (
-    'linear_momentum_norm',
-    np.float64,
-), (
-    'v_main',
-    np.float64,
-), (
-    'v_robot',
-    np.float64,
-), (
-    'i_robot',
-    np.float64,
-), (
-    'i_robot_keep_bit1',
-    np.float64,
-), (
-    'i_robot_keep_bit2',
-    np.float64,
-), ('tool_accelerometer_values', np.float64, (3, )),
-    ('elbow_position', np.float64, (3, )),
-    ('elbow_velocity', np.float64, (3, )),
-    ('q_target', np.float64, (6, )),
-    ('qd_target', np.float64, (6, )),
-    ('qdd_target', np.float64, (6, )),
-    ('i_target', np.float64, (6, )),
-    ('m_target', np.float64, (6, )),
-    ('q_actual', np.float64, (6, )),
-    ('qd_actual', np.float64, (6, )),
-    ('i_actual', np.float64, (6, )),
-    ('actual_TCP_force', np.float64, (6, )),
-    ('tool_vector_actual', np.float64, (6, )),
-    ('TCP_speed_actual', np.float64, (6, )),
-    ('TCP_force', np.float64, (6, )),
-    ('Tool_vector_target', np.float64, (6, )),
-    ('TCP_speed_target', np.float64, (6, )),
-    ('motor_temperatures', np.float64, (6, )),
-    ('joint_modes', np.float64, (6, )),
-    ('v_actual', np.float64, (6, )),
-    # ('dummy', np.float64, (9, 6))])
-    ('hand_type', np.byte, (4, )),
-    ('user', np.byte,),
-    ('tool', np.byte,),
-    ('run_queued_cmd', np.byte,),
-    ('pause_cmd_flag', np.byte,),
-    ('velocity_ratio', np.byte,),
-    ('acceleration_ratio', np.byte,),
-    ('jerk_ratio', np.byte,),
-    ('xyz_velocity_ratio', np.byte,),
-    ('r_velocity_ratio', np.byte,),
-    ('xyz_acceleration_ratio', np.byte,),
-    ('r_acceleration_ratio', np.byte,),
-    ('xyz_jerk_ratio', np.byte,),
-    ('r_jerk_ratio', np.byte,),
-    ('brake_status', np.byte,),
-    ('enable_status', np.byte,),
-    ('drag_status', np.byte,),
-    ('running_status', np.byte,),
-    ('error_status', np.byte,),
-    ('jog_status', np.byte,),
-    ('robot_type', np.byte,),
-    ('drag_button_signal', np.byte,),
-    ('enable_button_signal', np.byte,),
-    ('record_button_signal', np.byte,),
-    ('reappear_button_signal', np.byte,),
-    ('jaw_button_signal', np.byte,),
-    ('six_force_online', np.byte,),
-    ('reserve2', np.byte, (82, )),
-    ('m_actual', np.float64, (6, )),
-    ('load', np.float64,),
-    ('center_x', np.float64,),
-    ('center_y', np.float64,),
-    ('center_z', np.float64,),
-    ('user[6]', np.float64, (6, )),
-    ('tool[6]', np.float64, (6, )),
-    ('trace_index', np.float64,),
-    ('six_force_value', np.float64, (6, )),
-    ('target_quaternion', np.float64, (4, )),
-    ('actual_quaternion', np.float64, (4, )),
-    ('reserve3', np.byte, (24, ))])
+# MyType = np.dtype([(
+#     'len',
+#     np.int64,
+# ), (
+#     'digital_input_bits',
+#     np.uint64,
+# ), (
+#     'digital_output_bits',
+#     np.uint64,
+# ), (
+#     'robot_mode',
+#     np.uint64,
+# ), (
+#     'time_stamp',
+#     np.uint64,
+# ), (
+#     'time_stamp_reserve_bit',
+#     np.uint64,
+# ), (
+#     'test_value',
+#     np.uint64,
+# ), (
+#     'test_value_keep_bit',
+#     np.float64,
+# ), (
+#     'speed_scaling',
+#     np.float64,
+# ), (
+#     'linear_momentum_norm',
+#     np.float64,
+# ), (
+#     'v_main',
+#     np.float64,
+# ), (
+#     'v_robot',
+#     np.float64,
+# ), (
+#     'i_robot',
+#     np.float64,
+# ), (
+#     'i_robot_keep_bit1',
+#     np.float64,
+# ), (
+#     'i_robot_keep_bit2',
+#     np.float64,
+# ), ('tool_accelerometer_values', np.float64, (3, )),
+#     ('elbow_position', np.float64, (3, )),
+#     ('elbow_velocity', np.float64, (3, )),
+#     ('q_target', np.float64, (6, )),
+#     ('qd_target', np.float64, (6, )),
+#     ('qdd_target', np.float64, (6, )),
+#     ('i_target', np.float64, (6, )),
+#     ('m_target', np.float64, (6, )),
+#     ('q_actual', np.float64, (6, )),
+#     ('qd_actual', np.float64, (6, )),
+#     ('i_actual', np.float64, (6, )),
+#     ('actual_TCP_force', np.float64, (6, )),
+#     ('tool_vector_actual', np.float64, (6, )),
+#     ('TCP_speed_actual', np.float64, (6, )),
+#     ('TCP_force', np.float64, (6, )),
+#     ('Tool_vector_target', np.float64, (6, )),
+#     ('TCP_speed_target', np.float64, (6, )),
+#     ('motor_temperatures', np.float64, (6, )),
+#     ('joint_modes', np.float64, (6, )),
+#     ('v_actual', np.float64, (6, )),
+#     # ('dummy', np.float64, (9, 6))])
+#     ('hand_type', np.byte, (4, )),
+#     ('user', np.byte,),
+#     ('tool', np.byte,),
+#     ('run_queued_cmd', np.byte,),
+#     ('pause_cmd_flag', np.byte,),
+#     ('velocity_ratio', np.byte,),
+#     ('acceleration_ratio', np.byte,),
+#     ('jerk_ratio', np.byte,),
+#     ('xyz_velocity_ratio', np.byte,),
+#     ('r_velocity_ratio', np.byte,),
+#     ('xyz_acceleration_ratio', np.byte,),
+#     ('r_acceleration_ratio', np.byte,),
+#     ('xyz_jerk_ratio', np.byte,),
+#     ('r_jerk_ratio', np.byte,),
+#     ('brake_status', np.byte,),
+#     ('enable_status', np.byte,),
+#     ('drag_status', np.byte,),
+#     ('running_status', np.byte,),
+#     ('error_status', np.byte,),
+#     ('jog_status', np.byte,),
+#     ('robot_type', np.byte,),
+#     ('drag_button_signal', np.byte,),
+#     ('enable_button_signal', np.byte,),
+#     ('record_button_signal', np.byte,),
+#     ('reappear_button_signal', np.byte,),
+#     ('jaw_button_signal', np.byte,),
+#     ('six_force_online', np.byte,),
+#     ('reserve2', np.byte, (82, )),
+#     ('m_actual', np.float64, (6, )),
+#     ('load', np.float64,),
+#     ('center_x', np.float64,),
+#     ('center_y', np.float64,),
+#     ('center_z', np.float64,),
+#     ('user[6]', np.float64, (6, )),
+#     ('tool[6]', np.float64, (6, )),
+#     ('trace_index', np.float64,),
+#     ('six_force_value', np.float64, (6, )),
+#     ('target_quaternion', np.float64, (4, )),
+#     ('actual_quaternion', np.float64, (4, )),
+#     ('reserve3', np.byte, (24, ))])
+MyType = np.dtype([('len', np.uint16,),
+                   ('reserve', np.byte, (6, )),
+                   ('DigitalInputs', np.uint64,),
+                   ('DigitalOutputs', np.uint64,),
+                   ('RobotMode', np.uint64,),
+                   ('TimeStamp', np.uint64,),
+                   ('RunTime', np.uint64,),
+                   ('TestValue', np.uint64,),
+                   ('reserve2', np.byte, (8, )),
+                   ('SpeedScaling', np.float64,),
+                   ('reserve3', np.byte, (16, )),
+                   ('VRobot', np.float64, ),
+                   ('IRobot', np.float64,),
+                   ('ProgramState', np.float64,),
+                   ('SafetyOIn', np.uint16,),
+                   ('SafetyOOut', np.uint16,),
+                   ('reserve4', np.byte, (76, )),
+                   ('QTarget', np.float64, (6, )),
+                   ('QDTarget', np.float64, (6, )),
+                   ('QDDTarget', np.float64, (6, )),
+                   ('ITarget', np.float64, (6, )),
+                   ('MTarget', np.float64, (6, )),
+                   ('QActual', np.float64, (6, )),
+                   ('QDActual', np.float64, (6, )),
+                   ('IActual', np.float64, (6, )),
+                   ('ActualTCPForce', np.float64, (6, )),
+                   ('ToolVectorActual', np.float64, (6, )),
+                   ('TCPSpeedActual', np.float64, (6, )),
+                   ('TCPForce', np.float64, (6, )),
+                   ('ToolVectorTarget', np.float64, (6, )),
+                   ('TCPSpeedTarget', np.float64, (6, )),
+                   ('MotorTemperatures', np.float64, (6, )),
+                   ('JointModes', np.float64, (6, )),
+                   ('VActual', np.float64, (6, )),
+                   ('HandType', np.byte, (4, )),
+                   ('User', np.byte,),
+                   ('Tool', np.byte,),
+                   ('RunQueuedCmd', np.byte,),
+                   ('PauseCmdFlag', np.byte,),
+                   ('VelocityRatio', np.byte,),
+                   ('AccelerationRatio', np.byte,),
+                   ('reserve5', np.byte, ),
+                   ('XYZVelocityRatio', np.byte,),
+                   ('RVelocityRatio', np.byte,),
+                   ('XYZAccelerationRatio', np.byte,),
+                   ('RAccelerationRatio', np.byte,),
+                   ('reserve6', np.byte,(2,)),
+                   ('BrakeStatus', np.byte,),
+                   ('EnableStatus', np.byte,),
+                   ('DragStatus', np.byte,),
+                   ('RunningStatus', np.byte,),
+                   ('ErrorStatus', np.byte,),
+                   ('JogStatusCR', np.byte,),
+                   ('CRRobotType', np.byte,),
+                   ('DragButtonSignal', np.byte,),
+                   ('EnableButtonSignal', np.byte,),
+                   ('RecordButtonSignal', np.byte,),
+                   ('ReappearButtonSignal', np.byte,),
+                   ('JawButtonSignal', np.byte,),
+                   ('SixForceOnline', np.byte,),
+                   ('CollisionState', np.byte,),
+                   ('ArmApproachState', np.byte,),
+                   ('J4ApproachState', np.byte,),
+                   ('J5ApproachState', np.byte,),
+                   ('J6ApproachState', np.byte,),
+                   ('reserve7', np.byte, (61, )),
+                   ('VibrationDisZ', np.float64,),
+                   ('CurrentCommandId', np.uint64,),
+                   ('MActual', np.float64, (6, )),
+                   ('Load', np.float64,),
+                   ('CenterX', np.float64,),
+                   ('CenterY', np.float64,),
+                   ('CenterZ', np.float64,),
+                   ('UserValue[6]', np.float64, (6, )),
+                   ('ToolValue[6]', np.float64, (6, )),
+                   ('reserve8', np.byte, (8, )),
+                   ('SixForceValue', np.float64, (6, )),
+                   ('TargetQuaternion', np.float64, (4, )),
+                   ('ActualQuaternion', np.float64, (4, )),
+                   ('AutoManualMode', np.uint16, ),
+                   ('ExportStatus', np.uint16, ),
+                   ('SafetyState', np.byte, ),
+                   ('reserve9', np.byte,(19,))
+                   ])
 
 
 class DobotApi:
+    """
+    Dobot机械臂API通信类，用于与Dobot设备建立socket连接并进行数据交互
+
+    参数:
+        ip (str): Dobot设备的IP地址
+        port (int): 连接端口号，必须是29999、30003、30004、30005、30006中的一个
+        *args: 可变参数，第一个参数可选地提供一个Text对象用于日志输出
+    """
+
     def __init__(self, ip, port, *args):
         self.ip = ip
         self.port = port
         self.socket_dobot = 0
         self.text_log: Text = None
+        self.last_recv_time = time.perf_counter()
         if args:
             self.text_log = args[0]
 
+        # 验证端口号是否为允许的值，并建立socket连接
         if self.port == 29999 or self.port == 30003 or self.port == 30004\
                 or self.port == 30005 or self.port == 30006:
             try:
@@ -136,20 +232,39 @@ class DobotApi:
                 f"Connect to feed server need use port {self.port} !")
 
     def log(self, text):
+        """
+        记录日志信息，如果提供了text_log对象则输出到该对象，否则打印到控制台
+
+        参数:
+            text (str): 要记录的日志文本
+        """
         if self.text_log:
             date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S ")
             self.text_log.insert(END, date+text+"\n")
         else:
             print(text)
 
-    def send_data(self, string,is_log = True):
+    def send_data(self, string, is_log=True):
+        """
+        向Dobot设备发送数据
+
+        参数:
+            string (str): 要发送的字符串数据
+            is_log (bool): 是否记录发送日志，默认为True
+        """
         if is_log:
             self.log(f"Send to 192.168.5.1:{self.port}: {string}")
         self.socket_dobot.send(str.encode(string, 'utf-8'))
 
-    def wait_reply(self,is_log=True):
+    def wait_reply(self, is_log=True):
         """
-        Read the return value
+        读取Dobot设备的返回值
+
+        参数:
+            is_log (bool): 是否记录接收日志，默认为True
+
+        返回:
+            str: 从设备接收到的字符串响应数据
         """
         data = self.socket_dobot.recv(1024)
         data_str = str(data, encoding="utf-8")
@@ -157,15 +272,55 @@ class DobotApi:
             self.log(f'Receive from 192.168.5.1:{self.port}: {data_str}')
         return data_str
 
+    def feedBackData(self):
+        """
+        返回机械臂状态
+        Return the robot status
+        """
+        self.socket_dobot.setblocking(True)  # 设置为阻塞模式
+        data = bytes()
+        current_recv_time = time.perf_counter()  # 计时，获取当前时间
+        temp = self.socket_dobot.recv(144000)  # 缓冲区
+        if len(temp) > 1440:
+            temp = self.socket_dobot.recv(144000)
+        # print("get:",len(temp))
+        i = 0
+        if len(temp) < 1440:
+            while i < 5:
+                # print("重新接收")
+                temp = self.socket_dobot.recv(144000)
+                if len(temp) > 1440:
+                    break
+                i += 1
+            if i >= 5:
+                raise Exception("接收数据包缺失，请检查网络环境")
+
+        interval = (current_recv_time - self.last_recv_time) * 1000  # 转换为毫秒
+        self.last_recv_time = current_recv_time
+        # print(f"Time interval since last receive: {interval:.3f} ms")
+
+        data = temp[0:1440]  # 截取1440字节
+        # print(len(data))
+        # print(f"Single element size of MyType: {MyType.itemsize} bytes")
+        self.__MyType = None
+
+        if len(data) == 1440:
+            self.__MyType = np.frombuffer(data, dtype=MyType)
+
+        return self.__MyType
     def close(self):
         """
-        Close the port
+        关闭与Dobot设备的socket连接
         """
         if (self.socket_dobot != 0):
             self.socket_dobot.close()
 
     def __del__(self):
+        """
+        析构函数，确保对象被删除时关闭连接
+        """
         self.close()
+
 
 
 class DobotApiDashboard(DobotApi):

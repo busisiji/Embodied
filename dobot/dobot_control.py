@@ -1,5 +1,5 @@
 # file: /media/jetson/KESU/code/Embodied/api/dobot/dobot_control.py
-
+import socket
 import threading
 import time
 import re
@@ -7,7 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 
 import numpy as np
-from dobot.dobot_api import DobotApiDashboard, DobotApiMove, DobotApi, MyType
+# from dobot.dobot_api import DobotApiDashboard, DobotApiMove, DobotApi, MyType
+from dobot.arm.dobot_api import DobotApiDashboard, DobotApi, MyType, DobotApiFeedBack
 from api.utils.websocket_utils import send_error_notification_sync
 from parameters import RED_CAMERA, POINT_HOME, POINT_TRANSIT, POINT_DOWN, POINT_UP, SAC_CAMERA, FOUR_WORLD_SAC, \
     POINT_SAC_DOWN, IO_QI, RCV_CAMERA, BLACK_CAMERA
@@ -28,9 +29,8 @@ def _is_empty_error_list(error_info):
     return not cleaned or cleaned == ""
 
 
-class URController:
-    def __init__(self, ip="192.168.5.1", port=30003, dashboard_port=29999, feed_port=30006,
-                 acceleration=0.5, velocity=0.3, tool_coordinates=(0, 0, 0.1)):
+class URController():
+    def __init__(self, ip="192.168.5.1", port=30003, dashboard_port=29999, feed_port=30004):
         """
         初始化UR机械臂控制器
 
@@ -40,7 +40,6 @@ class URController:
         @param feed_port: 反馈端口
         @param acceleration: 运动加速度 (0-1)
         @param velocity: 运动速度 (0-1)
-        @param tool_coordinates: 工具坐标系 (x, y, z)
         """
         self.ip = ip
         self.port = port
@@ -52,7 +51,6 @@ class URController:
         self.current_actual = None  # 当前坐标
         self.is_wait = True
 
-        self.tool_coordinates = tool_coordinates
         self.safety_zone = (5, 5, 0.05)  # 安全区域范围
 
         # Dobot机械臂相关参数
@@ -71,32 +69,245 @@ class URController:
         self.height_limit_enabled = False  # 是否启用限高功能
         self.min_height = 0.0  # 最低移动高度
 
+        # 添加暂停/恢复功能相关属性
+        self.paused = False  # 是否处于暂停状态
+        self.paused_operations = []  # 记录暂停时的操作
+        self.pause_event = threading.Event()  # 用于暂停控制
+
         # 启动连接
         self.connect()
 
         # 初始化线程池
         self.executor = ThreadPoolExecutor(max_workers=4)
-    def _execute_command(self, connection, func, *args, description="", **kwargs):
+
+    # 连接
+    def connect(self):
+        """连接到Dobot机械臂"""
+        try:
+            print("🔌 正在建立连接...")
+            # self.move = DobotApiMove(self.ip, self.port)
+            # self.feed = DobotApi(self.ip, self.feed_port)
+            # self.dashboard = DobotApiDashboard(self.ip, self.dashboard_port)
+            self.dashboard = DobotApiDashboard(self.ip, self.dashboard_port)
+            self.feed = DobotApiFeedBack(self.ip, self.feed_port)
+            self.move = self.dashboard
+
+            # 验证连接
+            if not self.dashboard.socket_dobot:
+                raise Exception("Dashboard连接失败")
+            if not self.move.socket_dobot:
+                raise Exception("Move连接失败")
+            if not self.feed.socket_dobot:
+                raise Exception("Feed连接失败")
+
+            print(f"✅ Dashboard连接成功 (端口 {self.dashboard_port})")
+            print(f"✅ Move连接成功 (端口 {self.port})")
+            print(f"✅ Feed连接成功 (端口 {self.feed_port})")
+
+            # 启动反馈线程
+            self._start_feed_thread()
+
+            # 启动报警监控线程
+            self._start_alarm_monitoring()
+
+            # 上电和使能
+            self.power_on()
+            self.enable_robot()
+
+            # 设置初始速度和加速度
+            self.set_speed(0.5)
+
+            if not self.is_connected():
+                raise Exception("连接失败")
+
+            print("✅ 连接成功")
+
+        except Exception as e:
+            print(f"❌ 连接失败: {str(e)}")
+            raise e
+
+    def disconnect(self):
+        """断开连接"""
+        # 停止报警监控
+        self.alarm_monitoring = False
+
+        # 只有在不是当前线程且线程存在并活跃时才join
+        if (self.alarm_thread and
+            self.alarm_thread.is_alive() and
+            self.alarm_thread != threading.current_thread()):
+            self.alarm_thread.join(timeout=2)  # 等待最多2秒让线程结束
+
+        self.disable_robot()
+
+        # 安全地关闭所有连接
+        connections = [
+            ('Dashboard', self.dashboard),
+            ('Move', self.move),
+            ('Feed', self.feed)
+        ]
+
+        for name, connection in connections:
+            if connection and hasattr(connection, 'socket_dobot') and connection.socket_dobot:
+                try:
+                    connection.close()
+                    print(f"🔌 {name}连接已关闭")
+                except Exception as e:
+                    print(f"⚠️ 关闭{name}连接时出错: {e}")
+
+        # 清空引用
+        self.dashboard = None
+        self.move = None
+        self.feed = None
+
+        print("🔌 所有连接已断开")
+
+    def pause(self):
+        """
+        暂停机械臂操作
+        记录当前操作以便恢复时重新执行
+        """
+        if self.paused:
+            print("⚠️ 机械臂已处于暂停状态")
+            return False
+
+        try:
+            # while self.paused:
+            #     print("⚠️ 机械臂已处于暂停状态")
+            #     time.sleep(1)
+            # 发送暂停指令
+            result = self._execute_with_dashboard(
+                self.dashboard.Pause,
+                description="暂停机械臂"
+            )
+
+            if result:
+                self.paused = True
+                self.pause_event.clear()  # 设置事件为未触发状态
+                print("⏸️ 机械臂已暂停")
+                return True
+            else:
+                print("❌ 暂停指令发送失败")
+                return False
+
+        except Exception as e:
+            print(f"❌ 暂停过程中发生错误: {str(e)}")
+            return False
+
+    def resume(self):
+        """
+        恢复机械臂操作
+        重新执行暂停前的操作
+        """
+        if not self.paused:
+            print("⚠️ 机械臂未处于暂停状态")
+            return False
+
+        try:
+            # 发送继续指令
+            result = self._execute_with_dashboard(
+                self.dashboard.Continue,
+                description="恢复机械臂"
+            )
+
+            if result:
+                self.paused = False
+                self.pause_event.set()  # 设置事件为触发状态
+                print("▶️ 机械臂已恢复")
+
+                self.wait_mvoe()
+                return True
+            else:
+                print("❌ 恢复指令发送失败")
+                return False
+
+        except Exception as e:
+            print(f"❌ 恢复过程中发生错误: {str(e)}")
+            return False
+    # 基函数
+
+    def _execute_command(self, func,  description=""):
         """统一执行命令的方法"""
-        if not connection:
+        if not self.move:
             print(f"⚠️  {description}失败: 连接未建立")
             return None
         try:
-            result = func(*args, **kwargs)
+            result = func()
             return result
         except Exception as e:
             print(f"❌ {description}失败: {str(e)}")
             return None
 
-    def _execute_with_dashboard(self, func, *args, description="", **kwargs):
-        """执行需要dashboard连接的操作"""
-        return self._execute_command(self.dashboard, func, *args, description=description, **kwargs)
+    def _execute_command_async(self,func, point_list=[],description=""):
+        """异步执行命令的方法，避免阻塞调用线程"""
+        if not self.move:
+            print(f"⚠️  {description}失败: 连接未建立")
+            return None
 
-    def _execute_with_move(self, func, *args, description="", **kwargs):
-        """执行需要move连接的操作"""
-        result = self._execute_command(self.move, func, *args, description=description, **kwargs)
+        import threading
+        result_container = [None]
+        exception_container = [None]
+        event = threading.Event()
+
+        def run_command():
+            try:
+                result_container[0] = func()
+                # sync_result = self.move.Sync() # 会阻塞子线程
+                if point_list:
+                    while not self.wait_arrive(point_list):
+                        time.sleep(0.1)  # 短暂休眠，允许处理其他事件
+
+                print("✅ 机械臂运动完成")
+            except Exception as e:
+                exception_container[0] = e
+                print("运动时发生错误",e)
+            finally:
+                event.set()
+
+        # 在新线程中执行命令
+        command_thread = threading.Thread(target=run_command, daemon=True)
+        command_thread.start()
+
+        # 等待命令执行完成
+        event.wait()
+
+        # 检查是否有异常
+        if exception_container[0] is not None:
+            print(f"❌ {description}失败: {str(exception_container[0])}")
+            return None
+
+        return result_container
+
+    def _execute_with_move(self, func,point_list=[], description=""):
+        """执行移动操作"""
+        # 记录操作（如果处于暂停状态）
+        if self.paused:
+            operation = ("move", func)
+            self.paused_operations.append(operation)
+            while self.paused:
+                self.pause_event.wait()  # 阻塞直到事件被触发
+
+        # result = self._execute_command(func, description=description)
+        result = self._execute_command_async(func, point_list, description=description)
         return result is not None
+    def _execute_with_dashboard(self, func, description=""):
+        """执行需要dashboard连接的操作"""
 
+        if not self.dashboard:
+            print(f"⚠️  Dashboard连接未建立，{description}失败")
+            return None
+
+        # 检查socket是否有效
+        if not hasattr(self.dashboard, 'socket_dobot') or not self.dashboard.socket_dobot:
+            print(f"⚠️  Dashboard socket无效，{description}失败")
+            return None
+
+        try:
+            result = func()
+            return result
+        except Exception as e:
+            print(f"❌ {description}失败: {str(e)}")
+            return None
+    # 报警处理
     def _start_alarm_monitoring(self):
         """启动报警监控线程"""
         self.alarm_monitoring = True
@@ -147,7 +358,6 @@ class URController:
                 if num > 10:
                     print("⚠️ 报警监控错误次数过多，将停止监控")
                     self.alarm_monitoring = False
-
 
     def _handle_alarm_detected(self, error_info):
         """处理检测到的报警"""
@@ -227,10 +437,11 @@ class URController:
                 return False
         return False
 
+    # 检查
+
     def is_alarm_active(self):
         """检查是否有活动报警"""
         return self.current_error_status is not None and self.current_error_status != "0"
-
     def is_point_reachable(self, x, y, z, rx=None, ry=None, rz=None):
         """
         检查给定点是否可以到达
@@ -244,23 +455,6 @@ class URController:
         @return: (bool, str) 是否可到达及原因说明
         """
         try:
-            # # 1. 检查连接状态
-            # if not self.connected:
-            #     return False, "机械臂未连接"
-            #
-            # # 2. 检查报警状态
-            # if self.is_alarm_active():
-            #     return False, "机械臂处于报警状态"
-            #
-            # # 3. 检查高度限制
-            # if self.height_limit_enabled and z < self.min_height:
-            #     return False, f"目标高度 {z} 低于最小限制高度 {self.min_height}"
-            #
-            # # 4. 检查安全区域
-            # if not self._in_safety_zone(x, y, z):
-            #     return False, f"目标位置 ({x:.3f}, {y:.3f}, {z:.3f}) 超出安全区域"
-
-            # 5. 检查工作范围（基于Dobot常见的工作范围）
             # 这些值可以根据具体的机械臂型号进行调整
             max_radius = 600  # 最大工作半径(mm)
             min_radius = 50  # 最小工作半径(mm)
@@ -301,67 +495,122 @@ class URController:
 
         except Exception as e:
             return False
-    def is_connected(self, check_count=3, check_interval=0.1):
+    def is_basic_connected(self):
         """
-        多次检查机械臂连接状态，提高准确性
-        @param check_count: 检查次数
-        @param check_interval: 检查间隔时间(秒)
-        @return: bool 连接状态
+        基本连接检查 - 只检查socket连接状态
         """
-        # 进行多次检查以确保连接稳定性
-        for i in range(check_count):
+        try:
+            # 检查所有连接对象是否存在
+            if not all([self.dashboard, self.move, self.feed]):
+                return False
+
+            # 检查socket对象是否存在
+            if not all([self.dashboard.socket_dobot,
+                       self.move.socket_dobot,
+                       self.feed.socket_dobot]):
+                return False
+
+            # 尝试发送简单命令检查连接
             try:
-                # 检查所有必需的连接对象是否存在且未关闭
-                dashboard_connected = (self.dashboard is not None and
-                                     hasattr(self.dashboard, 'socket_dobot') and
-                                     self.dashboard.socket_dobot is not None)
+                # 发送一个简单的命令来验证连接
+                response = self.dashboard.RobotMode()
+                return response is not None and len(response) > 0
+            except:
+                return False
 
-                move_connected = (self.move is not None and
-                                 hasattr(self.move, 'socket_dobot') and
-                                 self.move.socket_dobot is not None)
+        except Exception as e:
+            print(f"基本连接检查出错: {e}")
+            return False
+    def is_mode_checked(self):
+        """
+        检查Dobot机械臂的详细状态
+        """
+        try:
+            # 获取机器人模式
+            robot_mode_response = self.dashboard.RobotMode()
+            # print(f"原始机器人模式响应: {robot_mode_response}")
 
-                feed_connected = (self.feed is not None and
-                                 hasattr(self.feed, 'socket_dobot') and
-                                 self.feed.socket_dobot is not None)
-
-                # 检查套接字连接状态
-                # if dashboard_connected:
-                #     dashboard_connected = self._is_socket_alive(self.dashboard.socket_dobot)
-                #
-                # if move_connected:
-                #     move_connected = self._is_socket_alive(self.move.socket_dobot)
-
-                if feed_connected:
-                    feed_connected = self._is_socket_alive(self.feed.socket_dobot)
-
-                # 所有连接都必须正常
-                all_connected = feed_connected
-
-                # 如果任何一次检查失败，立即返回False
-                if not all_connected:
-                    if i < check_count - 1:  # 不是最后一次检查，等待后重试
-                        time.sleep(check_interval)
-                        continue
-                    else:  # 最后一次检查仍失败
+            # 解析响应
+            if robot_mode_response:
+                # 提取模式值 - 更安全的解析方法
+                mode = None
+                if "{" in robot_mode_response and "}" in robot_mode_response:
+                    try:
+                        mode_value = robot_mode_response.split("{")[1].split("}")[0]
+                        if mode_value.strip():  # 确保不是空字符串
+                            mode = int(mode_value)
+                    except (ValueError, IndexError) as e:
+                        print(f"解析模式值时出错: {e}")
                         return False
                 else:
-                    # 连接正常，如果不是最后一次检查，继续确认
-                    if i < check_count - 1:
-                        time.sleep(check_interval)
-                        continue
-                    else:  # 所有检查都通过
+                    # 尝试直接从响应中提取数字
+                    import re
+                    numbers = re.findall(r'\d+', robot_mode_response)
+                    if numbers:
+                        mode = int(numbers[0])
+
+                if mode is not None:
+                    # 根据3.8 RobotMode文档更新的模式定义
+                    mode_descriptions = {
+                        1: "初始化",
+                        2: "抱闸松开",
+                        3: "保留位",
+                        4: "未使能(抱闸未松开)",
+                        5: "使能(空闲)",  # 可以接收指令的状态
+                        6: "拖拽",
+                        7: "运行状态",
+                        8: "拖拽录制",
+                        9: "报警",
+                        10: "暂停状态",
+                        11: "点动"
+                    }
+
+                    mode_description = mode_descriptions.get(mode, f"未知模式({mode})")
+                    # print(f"机器人当前模式: {mode} - {mode_description}")
+
+                    # 检查是否可以接收指令
+                    if mode == 5:  # 使能(空闲)
+                        print("✅ 机器人已使能，可以接收运动指令")
                         return True
-
-            except Exception as e:
-                print(f"⚠️ 第{i+1}次连接状态检查异常: {str(e)}")
-                if i < check_count - 1:  # 不是最后一次检查，等待后重试
-                    time.sleep(check_interval)
-                    continue
-                else:  # 最后一次检查仍异常
+                    elif mode == 7:  # 运行状态
+                        print("⚠️ 机器人正在运行中")
+                        return True
+                    elif mode == 9:  # 报警
+                        print("❌ 机器人处于报警状态")
+                        # 检查具体错误
+                        error_info = self.get_current_error()
+                        if error_info:
+                            print(f"错误代码: {error_info}")
+                        return False
+                    elif mode == 10:  # 暂停状态
+                        print("⏸️ 机器人处于暂停状态")
+                        return False
+                    elif mode == 11:  # 点动
+                        print("🕹️ 机器人处于点动状态")
+                        return True
+                    elif mode == 4:  # 未使能
+                        print("⚠️ 机器人未使能，需要使能后才能接收指令")
+                        return False
+                    else:
+                        print(f"⚠️ 机器人处于{mode_description}状态 (模式: {mode})")
+                        # 模式1,2,3,6,8通常表示机器人不能立即接收运动指令
+                        return mode in [1, 2, 3, 6, 8] == False  # 只有不在这些模式中才返回True
+                else:
+                    print("⚠️ 无法解析机器人模式值")
                     return False
+            else:
+                print("❌ 无法获取机器人模式信息")
+                return False
 
-        return True  # 所有检查都通过
+        except Exception as e:
+            print(f"❌ 检查机器人状态时出错: {e}")
+            return False
 
+    def is_connected(self):
+        """
+        检查Dobot机械臂的连接
+        """
+        return self.is_basic_connected()
 
     def _is_socket_alive(self, sock):
         """
@@ -392,82 +641,31 @@ class URController:
         """获取当前错误状态"""
         return self.current_error_status
 
-    def connect(self):
-        """连接到Dobot机械臂"""
-        try:
-            print("🔌 正在建立连接...")
-            self.dashboard = DobotApiDashboard(self.ip, self.dashboard_port)
-            self.move = DobotApiMove(self.ip, self.port)
-            self.feed = DobotApi(self.ip, self.feed_port)
-
-            # 启动反馈线程
-            self._start_feed_thread()
-
-            # 启动报警监控线程
-            self._start_alarm_monitoring()
-
-            # 上电和使能
-            self.power_on()
-            self.enable_robot()
-
-            # 设置初始速度和加速度
-            self.set_speed(0.5)
-
-            if not self.is_connected():
-                raise Exception("连接失败")
-
-            print("✅ 连接成功")
-
-        except Exception as e:
-            print(f"❌ 连接失败: {str(e)}")
-            raise  e
-
-    def disconnect(self):
-        """断开连接"""
-        # 停止报警监控
-        self.alarm_monitoring = False
-
-        # 只有在不是当前线程且线程存在并活跃时才join
-        if (self.alarm_thread and
-            self.alarm_thread.is_alive() and
-            self.alarm_thread != threading.current_thread()):
-            self.alarm_thread.join(timeout=2)  # 等待最多2秒让线程结束
-
-        self.disable_robot()
-        if self.dashboard:
-            self.dashboard.close()
-        if self.move:
-            self.move.close()
-        if self.feed:
-            self.feed.close()
-        print("🔌 已断开连接")
-
+    # 反馈
 
     def _start_feed_thread(self):
         """启动反馈线程"""
-        self.feed_thread = threading.Thread(target=self._get_feed, args=(self.feed,))
+        self.feed_thread = threading.Thread(target=self._get_feed)
         self.feed_thread.setDaemon(True)
         self.feed_thread.start()
 
-    def _get_feed(self, feed: DobotApi):
+    def _get_feed(self):
         """获取机械臂反馈数据"""
         hasRead = 0
+        print("数据获取线程已启动...")
         while True:
             try:
-                data = bytes()
-                while hasRead < 1440:
-                    temp = feed.socket_dobot.recv(1440 - hasRead)
-                    if len(temp) > 0:
-                        hasRead += len(temp)
-                        data += temp
-                hasRead = 0
+                # print("数据获取中...")
+                result = self.feed.feedBackData()
+                try:
+                    self.ToolVectorActual = result["ToolVectorActual"][0]
+                    self.DigitalInputs = result["DigitalInputs"][0]
+                    self.DigitalOutputs = result["DigitalOutputs"][0]
+                except Exception as e:
+                    pass
+                    # time.sleep(0.05)
 
-                a = np.frombuffer(data, dtype=MyType)
-                if hex((a['test_value'][0])) == '0x123456789abcdef':
-                    # 更新当前坐标
-                    self.current_actual = a["tool_vector_actual"][0]
-
-                time.sleep(0.001)
+                time.sleep(0.05)
             except:
                 if self.feed:
                     self.feed.close()
@@ -484,7 +682,6 @@ class URController:
                 print(f"⚠️ 等待机械臂到达超时 ({timeout}秒)")
                 return False
 
-            # 使用get_current_position方法获取当前位置
             current_pos = self.get_current_position()
             if current_pos is not None:
                 # 检查位置数据是否有效 (基于返回的坐标值判断)
@@ -508,7 +705,11 @@ class URController:
                 if is_arrive:
                     print("✅ 机械臂已到达目标位置")
                     return True
-
+            else:
+                if time.time() - last_valid_position_time > 5:  # 5秒内未收到有效位置
+                    print("⚠️ 位置数据持续异常")
+                    return False
+                time.sleep(0.1)
             time.sleep(0.0001)
 
     def power_on(self):
@@ -538,7 +739,7 @@ class URController:
         )
         if result:
             print("🛑 正在失能...")
-
+    # 设置参数
     def set_speed(self, speed_factor=0.5):
         """设置运动速度因子"""
         if 0 < speed_factor < 1:
@@ -549,24 +750,6 @@ class URController:
         )
         if result:
             print(f"⚙️ 设置速度因子为 {speed_factor}")
-
-    def set_user_coordinate(self, user_index=0):
-        """设置用户坐标系"""
-        result = self._execute_with_dashboard(
-            lambda: self.dashboard.User(user_index),
-            description=f"设置用户坐标系为 {user_index}"
-        )
-        if result:
-            print(f"🔧 设置用户坐标系为 {user_index}")
-
-    def set_tool_coordinate(self, tool_index=0):
-        """设置工具坐标系"""
-        result = self._execute_with_dashboard(
-            lambda: self.dashboard.Tool(tool_index),
-            description=f"设置工具坐标系为 {tool_index}"
-        )
-        if result:
-            print(f"🔧 设置工具坐标系为 {tool_index}")
 
     def get_param(self, param_name):
         """
@@ -628,17 +811,6 @@ class URController:
 
         return params
 
-    def set_height_limit(self, enabled=True, min_height=0.0):
-        """
-        设置机械臂限高功能
-        @param enabled: 是否启用限高功能
-        @param min_height: 最低移动高度
-        """
-        self.height_limit_enabled = enabled
-        self.min_height = min_height
-        status = "启用" if enabled else "禁用"
-        print(f"📏 限高功能已{status}，最低高度: {min_height}mm")
-
     def _apply_height_limit(self, point_list):
         """
         应用高度限制到目标点
@@ -671,72 +843,30 @@ class URController:
             move_desc = "关节运动到"
 
         # 执行移动
+        point_list = [limited_point[0], limited_point[1], limited_point[2],
+                        limited_point[3], limited_point[4], limited_point[5]]
         result = self._execute_with_move(
             lambda: func(limited_point[0], limited_point[1], limited_point[2],
-                        limited_point[3], limited_point[4], limited_point[5]),
+                 limited_point[3], limited_point[4], limited_point[5]),
+            point_list,
             description=f"{move_desc} X:{limited_point[0]:.3f}, Y:{limited_point[1]:.3f}, Z:{limited_point[2]:.3f}"
         )
 
         if result:
             print(f"🕹️ {move_desc} X:{limited_point[0]:.3f}, Y:{limited_point[1]:.3f}, Z:{limited_point[2]:.3f}")
-
-            # 如果需要等待，则使用Sync等待运动完成
-            if self.is_wait:
-                sync_result = self._execute_with_move(
-                    self.move.Sync,
-                    description="等待运动完成"
-                )
-                if sync_result:
-                    print("✅ 机械臂运动完成")
-                else:
-                    print("❌ 等待运动完成时发生错误")
-
             return result
         return False
 
-    def set_arm_orientation(self, hand="right"):
-        """
-        设置机械臂手系方向
-        @param hand: 手系类型 ("right" 或 "left")
-        """
-        # 定义左右手系参数
-        hand_config = {
-            "right": {
-                "r": 1,    # 向前
-                "d": 1,    # 上肘
-                "n": -1,    # 手腕翻转
-                "cfg": 1,  # 第六轴角度标识
-                "name": "右手系"
-            },
-            "left": {
-                "r": -1,   # 向后
-                "d": -1,   # 下肘
-                "n": -1,   # 手腕翻转
-                "cfg": -1, # 第六轴角度标识
-                "name": "左手系"
-            }
-        }
-
-        # 检查输入参数
-        if hand not in hand_config:
-            print(f"⚠️ 无效的手系参数: {hand}，使用默认右手系")
-            hand = "right"
-
-        config = hand_config[hand]
-
-        result = self._execute_with_dashboard(
-            lambda: self.dashboard.SetArmOrientation(
-                config["r"],
-                config["d"],
-                config["n"],
-                config["cfg"]
-            ),
-            description=f"设置{config['name']}"
+    def wait_mvoe(self):
+        """等待运动完成"""
+        sync_result = self._execute_with_move(
+            self.move.Sync,
+            description="等待运动完成"
         )
-
-        if result:
-            print(f"🔄 设置机械臂为{config['name']}")
-        return result
+        if sync_result:
+            print("✅ 机械臂运动完成")
+        else:
+            print("❌ 等待运动完成时发生错误")
 
     def run_point_l(self, point_list: list):
         """运行到指定点(直线运动)"""
@@ -846,10 +976,6 @@ class URController:
             print(f"❌ 操作失败: {str(e)}")
             return False
 
-    def set_tool_coordinates(self, x, y, z):
-        """设置工具坐标系"""
-        self.tool_coordinates = (x, y, z)
-        print(f"🔧 工具坐标系已设置为: ({x:.3f}, {y:.3f}, {z:.3f})")
 
     def set_safety_zone(self, x_range, y_range, z_range):
         """设置安全区域范围"""
@@ -869,10 +995,7 @@ class URController:
         @return: 当前位置坐标 (x, y, z) 或 None（如果获取失败）
         """
         try:
-            if self.current_actual is not None:
-                return (self.current_actual[0], self.current_actual[1], self.current_actual[2],
-                        self.current_actual[3], self.current_actual[4], self.current_actual[5])
-            return None
+            return self.ToolVectorActual
         except Exception as e:
             print(f"❌ 获取位置失败: {str(e)}")
             return None
@@ -890,7 +1013,7 @@ class URController:
     def get_di(self, io_index,is_log=True):
         """获取数字输入"""
         result = self._execute_with_dashboard(
-            lambda: self.dashboard.DI(io_index,is_log),
+            lambda: self.dashboard.DI(io_index),
             description=f"获取DI[{io_index}]"
         )
         if result:
@@ -918,31 +1041,32 @@ class URController:
         # print(f"⚠️ DI[{io_index}]无返回结果，默认返回0")
         return 0  # 返回默认值0而不是False，以兼容int()转换
 
-    def start_jog(self, axis_id, coord_type=0, user=0, tool=0):
-        """
-        开始点动运动
-        @param axis_id: 运动轴ID
-        @param coord_type: 坐标系类型 (0: 关节坐标系, 1: 用户坐标系, 2: 工具坐标系)
-        @param user: 用户坐标系索引
-        @param tool: 工具坐标系索引
-        @return: 是否成功发送指令
-        """
-        result = self._execute_with_move(
-            lambda: self.move.MoveJog(axis_id, coord_type, user, tool),
-            description="开始点动运动"
-        )
-        return result
-
-    def stop_jog(self):
-        """
-        停止点动运动
-        @return: 是否成功发送指令
-        """
+    def get_dis(self, *arg):
+        """批量获取数字输入"""
         result = self._execute_with_dashboard(
-            self.dashboard.StopScript,
-            description="停止点动运动"
+            lambda: self.dashboard.DIGroup(*arg),
+            description=f"获取批量DI{list(arg)}"
         )
-        return result is not None
+        if result:
+            try:
+                # 解析返回结果 '0,{0,0,0},DIGroup(1,2,3);'
+                # 提取 {0,0,0} 部分
+                if "," in result:
+
+                    values_str = result.split("{")[1].split("}")[0]
+                    di_values = [int(x.strip()) for x in values_str.split(",")]
+
+                    xt = time.time()
+                    return di_values
+
+                # 如果解析失败，返回默认值
+                return [-1] * len(arg)
+            except Exception as e:
+                # print(f"⚠️ 解析DIGroup结果失败: {result}, 错误: {str(e)}")
+                return [-1] * len(arg)
+        else:
+            # 如果没有返回结果，返回默认值
+            return [-1] * len(arg)
 
     def close_all(self):
         """关闭所有连接和资源"""
@@ -954,29 +1078,6 @@ class URController:
         if self.feed:
             self.feed.close()
         print("🔌 所有连接已关闭")
-
-    def reset_position_data(self):
-        """重置位置数据"""
-        print("🔄 重置位置数据...")
-        self.current_actual = None
-        # 可以考虑重新初始化机械臂或执行回家操作
-        self.move_home()
-
-    def is_position_valid(self):
-        """检查当前位置数据是否有效"""
-        if self.current_actual is None:
-            return False
-
-        x, y, z = self.current_actual[0], self.current_actual[1], self.current_actual[2]
-        # 检查是否为合理数值（不是无穷大或NaN）
-        if not (np.isfinite(x) and np.isfinite(y) and np.isfinite(z)):
-            return False
-
-        # 检查是否在工作范围内
-        if abs(x) > 1000 or abs(y) > 1000 or z < -100 or z > 500:
-            return False
-
-        return True
 
     def handle_joint_limit_error(self):
         """
@@ -1006,220 +1107,6 @@ class URController:
         print("✅ 关节超限错误已处理")
         return True
 
-    # 所有移动函数放在类的最下面
-    def MovJ(self, x, y, z, rx, ry, rz):
-        """
-        关节运动接口 (点到点运动模式)
-        @param x: 笛卡尔坐标系中的x坐标
-        @param y: 笛卡尔坐标系中的y坐标
-        @param z: 笛卡尔坐标系中的z坐标
-        @param rx: Rx轴位置
-        @param ry: Ry轴位置
-        @param rz: Rz轴位置
-        """
-        point = [x, y, z, rx, ry, rz]
-        return self.run_point_j(point)
-
-    def MovL(self, x, y, z, rx, ry, rz):
-        """
-        坐标系运动接口 (直线运动模式)
-        @param x: 笛卡尔坐标系中的x坐标
-        @param y: 笛卡尔坐标系中的y坐标
-        @param z: 笛卡尔坐标系中的z坐标
-        @param rx: Rx轴位置
-        @param ry: Ry轴位置
-        @param rz: Rz轴位置
-        """
-        point = [x, y, z, rx, ry, rz]
-        return self.run_point_l(point)
-
-    def JointMovJ(self, j1, j2, j3, j4, j5, j6):
-        """
-        关节运动接口 (线性运动模式)
-        @param j1~j6: 各关节上的点位置值
-        """
-        # 注意：此函数需要将关节坐标转换为笛卡尔坐标
-        # 这里直接调用底层API，绕过高度限制
-        result = self._execute_with_move(
-            lambda: self.move.JointMovJ(j1, j2, j3, j4, j5, j6),
-            description=f"关节运动到 J1:{j1:.3f}, J2:{j2:.3f}, J3:{j3:.3f}, J4:{j4:.3f}, J5:{j5:.3f}, J6:{j6:.3f}"
-        )
-        return result
-
-    def RelMovJ(self, offset1, offset2, offset3, offset4, offset5, offset6):
-        """
-        偏移运动接口 (点到点运动模式)
-        @param offset1~offset6: 各关节上的偏移位置值
-        """
-        result = self._execute_with_move(
-            lambda: self.move.RelMovJ(offset1, offset2, offset3, offset4, offset5, offset6),
-            description=f"相对关节运动 Offset1:{offset1:.3f} ... Offset6:{offset6:.3f}"
-        )
-        return result
-
-    def RelMovL(self, offsetX, offsetY, offsetZ):
-        """
-        偏移运动接口 (直线运动模式)
-        @param offsetX: X轴偏移量
-        @param offsetY: Y轴偏移量
-        @param offsetZ: Z轴偏移量
-        """
-        result = self._execute_with_move(
-            lambda: self.move.RelMovL(offsetX, offsetY, offsetZ),
-            description=f"相对直线运动 OffsetX:{offsetX:.3f}, OffsetY:{offsetY:.3f}, OffsetZ:{offsetZ:.3f}"
-        )
-        return result
-
-    def MovLIO(self, x, y, z, a, b, c, *dynParams):
-        """
-        在直线运动的同时并行设置数字输出端口状态
-        @param x: 笛卡尔坐标系中的x坐标
-        @param y: 笛卡尔坐标系中的y坐标
-        @param z: 笛卡尔坐标系中的z坐标
-        @param a: 笛卡尔坐标系中的a坐标
-        @param b: 笛卡尔坐标系中的b坐标
-        @param c: 笛卡尔坐标系中的c坐标
-        @param dynParams: 参数设置（Mode、Distance、Index、Status）
-        """
-        # 应用高度限制
-        limited_point = self._apply_height_limit([x, y, z, a, b, c])
-
-        result = self._execute_with_move(
-            lambda: self.move.MovLIO(limited_point[0], limited_point[1], limited_point[2],
-                                   limited_point[3], limited_point[4], limited_point[5], *dynParams),
-            description=f"直线运动并设置IO X:{limited_point[0]:.3f}, Y:{limited_point[1]:.3f}, Z:{limited_point[2]:.3f}"
-        )
-        return result
-
-    def MovJIO(self, x, y, z, a, b, c, *dynParams):
-        """
-        在点到点运动的同时并行设置数字输出端口状态
-        @param x: 笛卡尔坐标系中的x坐标
-        @param y: 笛卡尔坐标系中的y坐标
-        @param z: 笛卡尔坐标系中的z坐标
-        @param a: 笛卡尔坐标系中的a坐标
-        @param b: 笛卡尔坐标系中的b坐标
-        @param c: 笛卡尔坐标系中的c坐标
-        @param dynParams: 参数设置（Mode、Distance、Index、Status）
-        """
-        # 应用高度限制
-        limited_point = self._apply_height_limit([x, y, z, a, b, c])
-
-        result = self._execute_with_move(
-            lambda: self.move.MovJIO(limited_point[0], limited_point[1], limited_point[2],
-                                   limited_point[3], limited_point[4], limited_point[5], *dynParams),
-            description=f"点到点运动并设置IO X:{limited_point[0]:.3f}, Y:{limited_point[1]:.3f}, Z:{limited_point[2]:.3f}"
-        )
-        return result
-
-    def Arc(self, x1, y1, z1, a1, b1, c1, x2, y2, z2, a2, b2, c2):
-        """
-        圆弧运动指令
-        @param x1, y1, z1, a1, b1, c1: 中间点坐标值
-        @param x2, y2, z2, a2, b2, c2: 终点坐标值
-        """
-        # 应用高度限制到终点
-        limited_point2 = self._apply_height_limit([x2, y2, z2, a2, b2, c2])
-
-        result = self._execute_with_move(
-            lambda: self.move.Arc(x1, y1, z1, a1, b1, c1,
-                                limited_point2[0], limited_point2[1], limited_point2[2],
-                                limited_point2[3], limited_point2[4], limited_point2[5]),
-            description=f"圆弧运动到 X:{limited_point2[0]:.3f}, Y:{limited_point2[1]:.3f}, Z:{limited_point2[2]:.3f}"
-        )
-        return result
-
-    def Circle(self, count, x1, y1, z1, a1, b1, c1, x2, y2, z2, a2, b2, c2):
-        """
-        整圆运动指令
-        @param count: 运行圈数
-        @param x1, y1, z1, a1, b1, c1: 中间点坐标值
-        @param x2, y2, z2, a2, b2, c2: 终点坐标值
-        """
-        # 应用高度限制到终点
-        limited_point2 = self._apply_height_limit([x2, y2, z2, a2, b2, c2])
-
-        result = self._execute_with_move(
-            lambda: self.move.Circle(count, x1, y1, z1, a1, b1, c1,
-                                   limited_point2[0], limited_point2[1], limited_point2[2],
-                                   limited_point2[3], limited_point2[4], limited_point2[5]),
-            description=f"整圆运动到 X:{limited_point2[0]:.3f}, Y:{limited_point2[1]:.3f}, Z:{limited_point2[2]:.3f}"
-        )
-        return result
-
-    def ServoJ(self, j1, j2, j3, j4, j5, j6):
-        """
-        基于关节空间的动态跟随指令
-        @param j1~j6: 各关节上的点位置值
-        """
-        result = self._execute_with_move(
-            lambda: self.move.ServoJ(j1, j2, j3, j4, j5, j6),
-            description=f"关节动态跟随 J1:{j1:.3f} ... J6:{j6:.3f}"
-        )
-        return result
-
-    def ServoP(self, x, y, z, a, b, c):
-        """
-        基于笛卡尔空间的动态跟随指令
-        @param x, y, z, a, b, c: 笛卡尔坐标点值
-        """
-        # 应用高度限制
-        limited_point = self._apply_height_limit([x, y, z, a, b, c])
-
-        result = self._execute_with_move(
-            lambda: self.move.ServoP(limited_point[0], limited_point[1], limited_point[2],
-                                   limited_point[3], limited_point[4], limited_point[5]),
-            description=f"笛卡尔动态跟随 X:{limited_point[0]:.3f}, Y:{limited_point[1]:.3f}, Z:{limited_point[2]:.3f}"
-        )
-        return result
-
-    def MoveJog(self, axis_id, *dynParams):
-        """
-        关节运动
-        @param axis_id: 关节运动轴
-        @param dynParams: 参数设置（coord_type, user_index, tool_index）
-        """
-        result = self._execute_with_move(
-            lambda: self.move.MoveJog(axis_id, *dynParams),
-            description=f"点动运动 {axis_id}"
-        )
-        return result
-
-    def StartTrace(self, trace_name):
-        """
-        轨迹拟合（轨迹文件笛卡尔点）
-        @param trace_name: 轨迹文件名（包含后缀）
-        """
-        result = self._execute_with_move(
-            lambda: self.move.StartTrace(trace_name),
-            description=f"开始轨迹跟踪 {trace_name}"
-        )
-        return result
-
-    def StartPath(self, trace_name, const, cart):
-        """
-        轨迹复现（轨迹文件关节点）
-        @param trace_name: 轨迹文件名（包含后缀）
-        @param const: 当const=1时，以恒定速度重复，将移除轨迹中的暂停和死区
-        @param cart: 当cart=1时，按笛卡尔路径复现
-        """
-        result = self._execute_with_move(
-            lambda: self.move.StartPath(trace_name, const, cart),
-            description=f"开始路径跟踪 {trace_name}"
-        )
-        return result
-
-    def StartFCTrace(self, trace_name):
-        """
-        带有力控的轨迹拟合（轨迹文件笛卡尔点）
-        @param trace_name: 轨迹文件名（包含后缀）
-        """
-        result = self._execute_with_move(
-            lambda: self.move.StartFCTrace(trace_name),
-            description=f"开始力控轨迹跟踪 {trace_name}"
-        )
-        return result
-
     def Sync(self):
         """
         阻塞程序执行队列指令，所有队列指令执行完毕后返回
@@ -1230,159 +1117,29 @@ class URController:
         )
         return result
 
-    def RelMovJTool(self, offset_x, offset_y, offset_z, offset_rx, offset_ry, offset_rz, tool, *dynParams):
+    def hll(self, i=-1, dos=[4, 5]):
         """
-        沿工具坐标系执行相对运动指令，末端运动模式为关节运动
-        @param offset_x: X轴方向偏移
-        @param offset_y: Y轴方向偏移
-        @param offset_z: Z轴方向偏移
-        @param offset_rx: Rx轴位置
-        @param offset_ry: Ry轴位置
-        @param offset_rz: Rz轴位置
-        @param tool: 选择的工具坐标系
-        @param dynParams: 参数设置（speed_j, acc_j, user）
+        异步设置DO状态
+        @param i: 需要点亮的DO编号，-1表示全部关闭
+        @param dos: 需要控制的DO编号列表
+        @return: Future对象列表
         """
-        result = self._execute_with_move(
-            lambda: self.move.RelMovJTool(offset_x, offset_y, offset_z, offset_rx, offset_ry, offset_rz, tool, *dynParams),
-            description=f"工具坐标系相对关节运动 OffsetX:{offset_x:.3f}, OffsetY:{offset_y:.3f}, OffsetZ:{offset_z:.3f}"
+        futures = []
+        for do_num in dos:
+            futures.append(do_num)
+            futures.append(1 if do_num == i else 0)
+        result = self._execute_with_dashboard(
+            lambda: self.dashboard.DOGroup(*futures),
+            description=f"设置DO"
         )
-        return result
+        return result is not None
 
-    def RelMovLTool(self, offset_x, offset_y, offset_z, offset_rx, offset_ry, offset_rz, tool, *dynParams):
-        """
-        沿工具坐标系执行相对运动指令，末端运动模式为直线运动
-        @param offset_x: X轴方向偏移
-        @param offset_y: Y轴方向偏移
-        @param offset_z: Z轴方向偏移
-        @param offset_rx: Rx轴位置
-        @param offset_ry: Ry轴位置
-        @param offset_rz: Rz轴位置
-        @param tool: 选择的工具坐标系
-        @param dynParams: 参数设置（speed_l, acc_l, user）
-        """
-        result = self._execute_with_move(
-            lambda: self.move.RelMovLTool(offset_x, offset_y, offset_z, offset_rx, offset_ry, offset_rz, tool, *dynParams),
-            description=f"工具坐标系相对直线运动 OffsetX:{offset_x:.3f}, OffsetY:{offset_y:.3f}, OffsetZ:{offset_z:.3f}"
-        )
-        return result
-
-    def RelMovJUser(self, offset_x, offset_y, offset_z, offset_rx, offset_ry, offset_rz, user, *dynParams):
-        """
-        沿用户坐标系执行相对运动指令，末端运动模式为关节运动
-        @param offset_x: X轴方向偏移
-        @param offset_y: Y轴方向偏移
-        @param offset_z: Z轴方向偏移
-        @param offset_rx: Rx轴位置
-        @param offset_ry: Ry轴位置
-        @param offset_rz: Rz轴位置
-        @param user: 选择的用户坐标系
-        @param dynParams: 参数设置（speed_j, acc_j, tool）
-        """
-        result = self._execute_with_move(
-            lambda: self.move.RelMovJUser(offset_x, offset_y, offset_z, offset_rx, offset_ry, offset_rz, user, *dynParams),
-            description=f"用户坐标系相对关节运动 OffsetX:{offset_x:.3f}, OffsetY:{offset_y:.3f}, OffsetZ:{offset_z:.3f}"
-        )
-        return result
-
-    def RelMovLUser(self, offset_x, offset_y, offset_z, offset_rx, offset_ry, offset_rz, user, *dynParams):
-        """
-        沿用户坐标系执行相对运动指令，末端运动模式为直线运动
-        @param offset_x: X轴方向偏移
-        @param offset_y: Y轴方向偏移
-        @param offset_z: Z轴方向偏移
-        @param offset_rx: Rx轴位置
-        @param offset_ry: Ry轴位置
-        @param offset_rz: Rz轴位置
-        @param user: 选择的用户坐标系
-        @param dynParams: 参数设置（speed_l, acc_l, tool）
-        """
-        result = self._execute_with_move(
-            lambda: self.move.RelMovLUser(offset_x, offset_y, offset_z, offset_rx, offset_ry, offset_rz, user, *dynParams),
-            description=f"用户坐标系相对直线运动 OffsetX:{offset_x:.3f}, OffsetY:{offset_y:.3f}, OffsetZ:{offset_z:.3f}"
-        )
-        return result
-
-    def RelJointMovJ(self, offset1, offset2, offset3, offset4, offset5, offset6, *dynParams):
-        """
-        沿各轴关节坐标系执行相对运动指令，末端运动模式为关节运动
-        @param offset1~offset6: 各关节上的偏移位置值
-        @param dynParams: 参数设置（speed_j, acc_j, user）
-        """
-        result = self._execute_with_move(
-            lambda: self.move.RelJointMovJ(offset1, offset2, offset3, offset4, offset5, offset6, *dynParams),
-            description=f"关节坐标系相对运动 Offset1:{offset1:.3f} ... Offset6:{offset6:.3f}"
-        )
-        return result
-
-    def hll(self,i=-1,dos=[4,5]):
-        """
-        异步设置DO[4]和DO[5]的状态
-        @param f_4: DO[4]的值 (0或1)
-        @param f_5: DO[5]的值 (0或1)
-        @return: Future对象
-        """
-        for do in dos:
-            if do != i :
-                self.set_do(do, 0)
-            else:
-                self.set_do(i, 1)
-        # def _hll_task():
-        #     try:
-        #         # 设置DO[4]
-        #         result_4 = self._execute_with_dashboard(
-        #             lambda: self.dashboard.DO(4, f_4),
-        #             description=f"设置DO[4] = {f_4}"
-        #         )
-        #
-        #         # 设置DO[5]
-        #         result_5 = self._execute_with_dashboard(
-        #             lambda: self.dashboard.DO(5, f_5),
-        #             description=f"设置DO[5] = {f_5}"
-        #         )
-        #
-        #         success = (result_4 is not None and result_5 is not None)
-        #         if success:
-        #             print(f"🔌 已设置 DO[4]={f_4}, DO[5]={f_5}")
-        #
-        #         return success
-        #     except Exception as e:
-        #         print(f"❌ 异步设置DO[4]和DO[5]失败: {str(e)}")
-        #         return False
-        #
-        # return self.executor.submit(_hll_task)
-
-
-    def get_io_status_range(self, start_index, end_index):
-        """
-        获取指定范围内的数字输入状态
-
-        @param start_index: 起始IO索引
-        @param end_index: 结束IO索引
-        @return: 包含IO状态的字典
-        """
-        io_status = {}
-        for i in range(start_index, end_index + 1):
-            status = self.get_di(i)
-            io_status[i] = status
-        return io_status
-
-    def set_io_range_to_zero(self, start_index, end_index,value=0):
-        """
-        将指定范围内的数字输出IO设置为0
-
-        @param start_index: 起始IO索引
-        @param end_index: 结束IO索引
-        @return: 设置成功的IO数量
-        """
-        success_count = 0
-        for i in range(start_index, end_index + 1):
-            if self.set_do(i, value):
-                success_count += 1
-        print(f"✅ 成功将IO {start_index}-{end_index}设置为0，共设置{success_count}个IO")
-        return success_count
     def __del__(self):
         """析构函数，确保资源被正确释放"""
         self.disconnect()
+
+
+
 def alarm_handling_test(controller):
     """
     报警处理测试函数
@@ -1484,7 +1241,7 @@ def alarm_handling_test(controller):
             pass
 
 
-def connect_and_check_speed(ip="192.168.5.1", port=30003, dashboard_port=29999, feed_port=30006):
+def connect_and_check_speed(ip="192.168.5.1", port=30003, dashboard_port=29999, feed_port=30004):
     """
     连接控制器并检查速度设置
 
@@ -1590,16 +1347,9 @@ def get_dis(urController,start_i,end_i):
     while 1:
         for i in range(start_i,end_i):
             di = urController.get_di(i, is_log=False)
-            if di == 1:
-                print(i,di)
+            # if di == 1:
+            print(i,di)
         time.sleep(1)
-
-def get_dos(urController,start_i,end_i):
-    while 1:
-        for i in range(start_i,end_i):
-            dos = urController.set_do(i, 1)
-            print(i,dos)
-            time.sleep(3)
 
 
 if __name__ == "__main__":
@@ -1607,19 +1357,33 @@ if __name__ == "__main__":
     urController = connect_and_check_speed()
     print(f"📍 当前位置: {urController.get_current_position()}")
     if urController:
+        # urController.hll(5)
+        # while 1:
+        #     # print(get_dis(urController,1,4))
+        #     print(urController.get_dis(1,2,3))
+        #     time.sleep(0.1)
         # x,y = pixel_to_world(114,140)
         # print(x,y)
         # urController.run_point_j([-173,-198,195,-179,0.2,-179])
         # time.sleep(5)
-        # urController.run_point_j(RED_CAMERA)
+        urController.run_point_j(RED_CAMERA)
+        # urController.pause()
+        # print('暂停')
+        # urController.run_point_j(BLACK_CAMERA)
+        # urController.hll(5)
+        # urController.resume()
+        # print('继续')
+        # urController.wait_mvoe()
+        # urController.run_point_j(BLACK_CAMERA)
+
         # urController.run_point_j([-28,-379,195,-179,0.2,-179])
-        # time.sleep(5)
+        # time.sleep(10)
         # urController.run_point_j(RED_CAMERA)
         # urController.run_point_j([175,-538,195,-179,0.2,-179])
         # time.sleep(5)
         # urController.run_point_j(RED_CAMERA)
         # urController.run_point_j(BLACK_CAMERA)
-        # time.sleep(5)
+        # time.sleep(1000)
         # urController.run_point_j([125,-343,195,-179,0.2,-179])
         # time.sleep(5)
         # urController.set_do(IO_QI, 0)  # 吸合123456
@@ -1627,7 +1391,7 @@ if __name__ == "__main__":
         # urController.run_point_j(RCV_CAMERA)
         # time.sleep(3)
         # urController.wait_arrive(BLACK_CAMERA)
-        # urController.move_to(-410.96, -299.49,260)
+        # urController.move_to(-410.96, -299.49,260)-
         # time.sleep(10)
         # urController.move_to(216, -596,250)
         # time.sleep(10)
@@ -1637,15 +1401,15 @@ if __name__ == "__main__":
         # time.sleep(5)
         # print(urController.is_point_reachable(-400, -440,319)
 
-        # time.sleep(100)
+        time.sleep(1000)
         # alarm_handling_test(urController)
-        # get_dis(urController,1,40)
-        # get_dos(urController,1,23)
-        urController.set_do(5, 1)
-        time.sleep(3)
-        urController.set_do(5, 0)
-        time.sleep(3)
-        urController.set_do(4, 0)
+        # get_dis(urController,1,4)
+        # get_dos(urController,1,4)
+        # urController.set_do(5, 1)
+        # time.sleep(3)
+        # urController.set_do(5, 0)
+        # time.sleep(3)
+        # urController.set_do(1, 1)
 
         # 断开连接
         urController.disconnect()

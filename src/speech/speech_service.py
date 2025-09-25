@@ -61,6 +61,11 @@ class OfflineKeywordRecognizer():
         # 加载模型
         self.model = self._load_model(model_path)
 
+        # 事件驱动机制
+        self.pause_event = threading.Event()
+        self.resume_event = threading.Event()
+        self.stop_event = threading.Event()
+
         self.update_keywords(keywords, wake_words)
 
         print("离线语音识别器初始化完成")
@@ -182,7 +187,7 @@ class OfflineKeywordRecognizer():
 
     def audio_callback(self, indata, frames, time, status):
         """
-        音频回调函数 - 优化版本
+        音频回调函数 - 事件驱动版本
         """
         if status:
             print(f"音频状态: {status}")
@@ -198,6 +203,7 @@ class OfflineKeywordRecognizer():
             except:
                 # 如果还是失败，就阻塞等待
                 self.audio_queue.put(indata.copy())
+
     def check_wake_state(self,is_wait=True):
         """
         检查唤醒状态，如果超时则重置
@@ -300,46 +306,53 @@ class OfflineKeywordRecognizer():
         except Exception as e:
             print(f"异步唤醒回调执行错误: {e}")
 
-
     async def start_listening(self):
         """
-        开始监听（非阻塞方式）
+        开始监听（非阻塞方式，事件驱动）
         """
         if self.is_listening:
             return
 
         self.is_listening = True
         self._paused = False
+
+        # 重置事件状态
+        self.pause_event.clear()
+        self.resume_event.set()
+        self.stop_event.clear()
+
         # 添加性能监控变量
         self.recognition_times = []  # 存储最近的识别时间，用于性能分析
-        self.data_get_times = []     # 存储数据获取时间，用于性能分析
+        self.data_get_times = []  # 存储数据获取时间，用于性能分析
 
         def listen_thread():
             print("开始离线语音监听...")
             try:
                 with sd.InputStream(
-                    samplerate=self.sample_rate,
-                    blocksize=self.block_size,
-                    dtype=np.int16,
-                    channels=1,
-                    callback=self.audio_callback
+                        samplerate=self.sample_rate,
+                        blocksize=self.block_size,
+                        dtype=np.int16,
+                        channels=1,
+                        callback=self.audio_callback
                 ):
-                    while self.is_listening:
+                    while self.is_listening and not self.stop_event.is_set():
                         # 检查唤醒状态
                         start_time = time.time()
                         self.check_wake_state()
                         check_wake_time = time.time() - start_time
 
-                        # 处理音频数据 - 优化数据获取
+                        # 处理音频数据 - 事件驱动方式
                         try:
                             data_start_time = time.time()
 
-                            # 使用非阻塞方式获取数据，减少等待时间
+                            # 使用非阻塞方式获取数据
                             try:
                                 data = self.audio_queue.get_nowait()
                             except queue.Empty:
-                                # 如果队列为空，短暂等待后重试
-                                data = self.audio_queue.get(timeout=0.01)  # 减少超时时间
+                                # 使用事件驱动的等待机制
+                                if self.stop_event.wait(0.01):  # 等待10ms或直到停止
+                                    break
+                                continue
 
                             data_get_time = time.time() - data_start_time
 
@@ -348,18 +361,17 @@ class OfflineKeywordRecognizer():
                             if len(self.data_get_times) > 10:  # 保持最近10次记录
                                 self.data_get_times.pop(0)
 
-                            avg_data_get_time = sum(self.data_get_times) / len(self.data_get_times) if self.data_get_times else 0
-
                             # 转换为bytes
                             self.data_bytes = data.tobytes()
 
-                            # print(f"数据获取耗时: {data_get_time*1000:.2f}ms (平均: {avg_data_get_time*1000:.2f}ms)")
-
-                            # 如果被暂停，则跳过处理
+                            # 检查暂停状态 - 使用事件驱动
                             if self._paused:
                                 print("已暂停，正在等待...")
-                                time.sleep(1)
-                                continue
+                                # 等待恢复事件或停止事件
+                                if self.resume_event.wait(0.1) or self.stop_event.wait(0.1):
+                                    continue
+                                else:
+                                    continue
 
                             # 识别音频
                             recognition_start_time = time.time()
@@ -372,16 +384,17 @@ class OfflineKeywordRecognizer():
                                 if len(self.recognition_times) > 10:  # 保持最近10次记录
                                     self.recognition_times.pop(0)
 
-                                avg_recognition_time = sum(self.recognition_times) / len(self.recognition_times) if self.recognition_times else 0
+                                avg_recognition_time = sum(self.recognition_times) / len(
+                                    self.recognition_times) if self.recognition_times else 0
 
-                                print(f"处理时间统计 - 唤醒检查: {check_wake_time*1000:.2f}ms, "
-                                      f"数据获取: {data_get_time*1000:.2f}ms, "
-                                      f"语音识别: {recognition_time*1000:.2f}ms (平均: {avg_recognition_time*1000:.2f}ms)")
+                                print(f"处理时间统计 - 唤醒检查: {check_wake_time * 1000:.2f}ms, "
+                                      f"数据获取: {data_get_time * 1000:.2f}ms, "
+                                      f"语音识别: {recognition_time * 1000:.2f}ms (平均: {avg_recognition_time * 1000:.2f}ms)")
                                 if 'text' in result and result['text'].strip():
                                     process_start_time = time.time()
                                     self.process_text(result['text'].strip())
                                     process_time = time.time() - process_start_time
-                                    print(f"文本处理耗时: {process_time*1000:.2f}ms")
+                                    print(f"文本处理耗时: {process_time * 1000:.2f}ms")
                             else:
                                 # 部分结果（可选处理）
                                 partial_result = json.loads(self.recognizer.PartialResult())
@@ -392,22 +405,26 @@ class OfflineKeywordRecognizer():
                                 if len(self.recognition_times) > 10:  # 保持最近10次记录
                                     self.recognition_times.pop(0)
 
-                                avg_recognition_time = sum(self.recognition_times) / len(self.recognition_times) if self.recognition_times else 0
+                                avg_recognition_time = sum(self.recognition_times) / len(
+                                    self.recognition_times) if self.recognition_times else 0
 
                                 # 只有在部分结果包含文字且长度大于1时才输出日志
                                 if ('partial' in partial_result and
-                                    partial_result['partial'].strip() and
-                                    len(partial_result['partial'].strip()) > 1):
-                                    print(f"处理时间统计 - 唤醒检查: {check_wake_time*1000:.2f}ms, "
-                                          f"数据获取: {data_get_time*1000:.2f}ms, "
-                                          f"部分识别: {recognition_time*1000:.2f}ms (平均: {avg_recognition_time*1000:.2f}ms)")
+                                        partial_result['partial'].strip() and
+                                        len(partial_result['partial'].strip()) > 1):
+                                    print(f"处理时间统计 - 唤醒检查: {check_wake_time * 1000:.2f}ms, "
+                                          f"数据获取: {data_get_time * 1000:.2f}ms, "
+                                          f"部分识别: {recognition_time * 1000:.2f}ms (平均: {avg_recognition_time * 1000:.2f}ms)")
 
                         except queue.Empty:
                             # 队列为空时短暂休眠，避免CPU占用过高
-                            time.sleep(0.005)  # 5ms
+                            if self.stop_event.wait(0.005):  # 等待5ms或直到停止
+                                break
                             continue
                         except Exception as e:
                             print(f"音频处理错误: {e}")
+                            if self.stop_event.wait(0.1):  # 等待100ms或直到停止
+                                break
 
             except Exception as e:
                 print(f"音频流错误: {e}")
@@ -417,28 +434,34 @@ class OfflineKeywordRecognizer():
         # 启动监听线程
         self.listen_thread = threading.Thread(target=listen_thread, daemon=True)
         self.listen_thread.start()
-
     def stop_listening(self):
         """
-        停止监听
+        停止监听（事件驱动方式）
         """
         self.is_listening = False
         self.is_awake = False
         self._paused = False
+        self.stop_event.set()
+
+        # 清理事件状态
+        self.pause_event.clear()
+        self.resume_event.set()
+
         if hasattr(self, 'listen_thread'):
             self.listen_thread.join(timeout=1)
 
     def pause_listening(self):
         """
-        暂停语音监听
+        暂停语音监听（事件驱动方式）
         """
         self._paused = True
+        self.pause_event.set()
+        self.resume_event.clear()
         print("语音识别已暂停")
-
 
     def resume_listening(self):
         """
-        恢复语音监听并清空缓存
+        恢复语音监听并清空缓存（事件驱动方式）
         """
         # 清空音频队列缓冲区
         while not self.audio_queue.empty():
@@ -448,6 +471,8 @@ class OfflineKeywordRecognizer():
                 break
 
         self._paused = False
+        self.pause_event.clear()
+        self.resume_event.set()
         print("语音识别已恢复")
 
 

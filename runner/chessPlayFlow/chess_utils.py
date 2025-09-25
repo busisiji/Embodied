@@ -63,10 +63,18 @@ class ChessPlayFlowUtils():
         Returns:
             list: 差异列表，包含位置和变化详情
         """
+
+
         differences = []
 
         for row in range(10):
             for col in range(9):
+                # 检查游戏状态，处理暂停和投降
+                surrendered, paused = self.parent.check_game_state()
+                if surrendered or self.parent.surrendered:
+                    return []
+
+
                 old_piece = old_positions[row][col]
                 new_piece = new_positions[row][col]
                 old_piece = self.parent.piece_map[old_piece] if old_piece in self.parent.piece_map else old_piece
@@ -129,11 +137,18 @@ class ChessPlayFlowUtils():
 
         # 遍历所有棋子位置
         for piece_key, (pixel_x, pixel_y) in self.parent.piece_pixel_positions.items():
+            # 检查游戏状态，处理暂停和投降
+            surrendered, paused = self.parent.check_game_state()
+            if surrendered or self.parent.surrendered:
+                return True  # 直接返回True以避免阻塞
+
+
             # 解析棋子位置
             row_idx = int(piece_key[0])
             row = 9 - row_idx
             col = int(piece_key[1])
-            point_type = self.parent.piece_map[self.parent.chess_positions[row_idx][col]]
+            point_key = self.parent.chess_positions[row_idx][col]
+            point_type = self.parent.piece_map[point_key] if point_key in self.parent.piece_map else point_key
 
             # 使用通用函数计算偏差
             deviation_data = self.parent.cMove._calculate_piece_deviation(row, col, pixel_x, pixel_y, tolerance)
@@ -240,11 +255,38 @@ class ChessPlayFlowUtils():
         max_attempts = 5  # 最大尝试次数
         move_uci = None
 
-        if self.parent.args.use_ag and len(self.parent.move_history)%8!=7:
+        # if self.parent.args.use_ag and len(self.parent.move_history)%8!=7:
+        if self.parent.args.use_ag:
             for attempt in range(max_attempts):
                 try:
                     from_x, from_y, to_x, to_y = uci_to_coordinates(self.parent.move_uci)
-                    move_uci = get_best_move_with_computer_play(self.parent.maingame, self.parent.board, from_x, from_y, to_x, to_y)
+
+                    # 将耗时的计算放到独立线程中执行
+                    def computer_play_task():
+                        return get_best_move_with_computer_play(self.parent.maingame, self.parent.board, from_x, from_y, to_x, to_y)
+
+                    # 使用事件来同步等待计算结果
+                    import threading
+                    result_container = [None]  # 用于在线程间传递结果
+                    calculation_event = threading.Event()
+
+                    def run_calculation():
+                        result_container[0] = computer_play_task()
+                        calculation_event.set()
+
+                    calculation_thread = threading.Thread(target=run_calculation, daemon=True)
+                    calculation_thread.start()
+
+                    # 等待计算完成，同时定期检查游戏状态
+                    while not calculation_event.is_set():
+                        # 检查游戏是否已结束或暂停
+                        surrendered, paused = self.parent.check_game_state()
+                        if surrendered or self.parent.surrendered:
+                            return None
+
+                        time.sleep(0.01)  # 短暂等待
+
+                    move_uci = result_container[0]
 
                     if move_uci:
                         # 检查计算出的移动是否在合法移动列表中
@@ -256,23 +298,67 @@ class ChessPlayFlowUtils():
                             print(f"⚠️ 第{attempt + 1}次尝试计算出的移动 {move_uci} 不在合法移动列表中")
                     else:
                         print(f"⚠️ 第{attempt + 1}次尝试未获得有效移动，重新计算...")
-                        time.sleep(1)  # 短暂等待后重试
+                        # 等待时也检查游戏状态
+                        for _ in range(100):  # 1秒分成100个0.01秒
+                            surrendered, paused = self.parent.check_game_state()
+                            if surrendered or self.parent.surrendered:
+                                return None
+
+                            time.sleep(0.01)
 
                 except Exception as e:
                     print(f"⚠️ 第{attempt + 1}次尝试出错: {e}")
                     if attempt < max_attempts - 1:
-                        time.sleep(1)  # 出错后等待再重试
+                        # 出错后等待再重试，同时检查游戏状态
+                        for _ in range(100):  # 1秒分成100个0.01秒
+                            surrendered, paused = self.parent.check_game_state()
+                            if surrendered or self.parent.surrendered:
+                                return None
+
+                            time.sleep(0.01)
                     continue
 
         # 如果经过多次尝试仍未获得合法移动，则从合法移动列表中选择
         if not move_uci and legal_moves:
             try:
                 asyncio.run(self.parent.speak_cchess("AI切换为复杂运算，请稍等"))
-                move_id = self.parent.mcts_player.get_action(self.parent.board)
-                move_uci = move_id2move_action[move_id]
-                move_mg = self.uci_to_mg_coords(move_uci)
-                # 执行移动到MainGame并保存历史信息
-                self.parent.maingame.mgInit.move_to(move_mg)
+
+                # 将耗时的AI计算放到独立线程中执行
+                def ai_calculation_task():
+                    try:
+                        move_id = self.parent.mcts_player.get_action(self.parent.board)
+                        return move_id2move_action[move_id]
+                    except Exception as e:
+                        print(f"AI计算出错: {e}")
+                        return None
+
+                # 使用事件来同步等待AI计算结果
+                import threading
+                result_container = [None]  # 用于在线程间传递结果
+                calculation_event = threading.Event()
+
+                def run_calculation():
+                    result_container[0] = ai_calculation_task()
+                    calculation_event.set()
+
+                calculation_thread = threading.Thread(target=run_calculation, daemon=True)
+                calculation_thread.start()
+
+                # 等待AI计算完成，同时定期检查游戏状态
+                while not calculation_event.is_set():
+                    # 检查游戏是否已结束或暂停
+                    surrendered, paused = self.parent.check_game_state()
+                    if surrendered or self.parent.surrendered:
+                        return None
+
+                    time.sleep(0.1)  # 短暂等待
+
+                move_uci = result_container[0]
+
+                if move_uci:
+                    move_mg = self.uci_to_mg_coords(move_uci)
+                    # 执行移动到MainGame并保存历史信息
+                    self.parent.maingame.mgInit.move_to(move_mg)
 
             except Exception as e:
                 selected_move = legal_moves[0]
@@ -430,6 +516,7 @@ class ChessPlayFlowUtils():
             distance = col_names[to_col]
 
         return f"{piece_type}{col_names[from_col]}{direction}{distance}"
+
     def uci_to_mg_coords(self, uci):
         """
         将UCI格式的移动转换为MainGame坐标

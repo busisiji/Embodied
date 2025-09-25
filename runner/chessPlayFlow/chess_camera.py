@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 import time
 
 import cv2
@@ -66,6 +67,7 @@ class ChessPlayFlowCamera():
                 cv2.destroyAllWindows()
         except:
             pass
+
     def capture_stable_image(self, num_frames=5, is_chessboard=True):
         """
         捕获稳定的图像和深度信息（通过多帧平均减少噪声）
@@ -81,18 +83,20 @@ class ChessPlayFlowCamera():
         retry_count = 0
 
         while retry_count < max_retry_attempts:
-            if self.parent.surrendered:
-                return
-
-            if  self.parent.pipeline is None:
+            if self.parent.pipeline is None:
                 # 尝试重新初始化相机
                 asyncio.run(self.parent.speak_cchess("相机未连接，正在重新连接相机"))
                 self.parent.init_camera()
 
                 if self.parent.pipeline is None:
                     retry_count += 1
-                    asyncio.run(self.parent.speak_cchess(f"相机连接失败，{retry_count}秒后重试"))
-                    time.sleep(5)
+                    asyncio.run(self.parent.speak_cchess(f"相机连接失败"))
+                    # 使用更短的等待时间，并定期检查游戏状态
+                    for _ in range(50):  # 5秒分成50个0.1秒
+                        surrendered, paused = self.parent.check_game_state()
+                        if surrendered:
+                            return None, None
+                        time.sleep(0.1)
                     continue
 
             try:
@@ -101,6 +105,10 @@ class ChessPlayFlowCamera():
 
                 # 捕获多帧图像
                 for i in range(num_frames):
+                    # 定期检查游戏状态
+                    if self.parent.surrendered:
+                        return None, None
+
                     frames = self.parent.pipeline.wait_for_frames(timeout_ms=5000)  # 设置超时时间
                     color_frame = frames.get_color_frame()
                     depth_frame = frames.get_depth_frame()
@@ -112,8 +120,11 @@ class ChessPlayFlowCamera():
                     else:
                         continue
 
-                    # 短暂等待
-                    time.sleep(0.1)
+                    # 短暂等待，也定期检查游戏状态
+                    for _ in range(10):  # 0.1秒分成10个0.01秒
+                        if self.parent.surrendered:
+                            return None, None
+                        time.sleep(0.01)
 
                 if not frames_list:
                     raise Exception("无法捕获有效图像帧")
@@ -158,6 +169,9 @@ class ChessPlayFlowCamera():
                 return result_frame, latest_depth_frame
 
             except Exception as e:
+                # 定期检查游戏状态
+                if self.parent.surrendered:
+                    return None, None
 
                 retry_count += 1
                 error_msg = f"捕获图像失败，第{retry_count}次重试"
@@ -169,8 +183,11 @@ class ChessPlayFlowCamera():
                     asyncio.run(self.parent.speak_cchess("已达最大重试次数，无法获取图像"))
                     break
 
-                # 等待一段时间后重试
-                time.sleep(3)
+                # 等待一段时间后重试，也定期检查游戏状态
+                for _ in range(30):  # 3秒分成30个0.1秒
+                    if self.parent.surrendered:
+                        return None, None
+                    time.sleep(0.1)
 
                 # 尝试重新初始化相机
                 asyncio.run(self.parent.speak_cchess("正在重新初始化相机"))
@@ -180,6 +197,7 @@ class ChessPlayFlowCamera():
         # 如果所有重试都失败，返回None
         asyncio.run(self.parent.speak_cchess("无法捕获稳定图像，请检查相机连接"))
         return None, None
+
     # 识别
     def detect_chess_box(self, max_attempts=10):
         """
@@ -273,12 +291,16 @@ class ChessPlayFlowCamera():
                 else:
                     print("🔍 未检测到任何圆形标记")
         return chess_box_points
-    def recognize_chessboard(self,is_run_red=False,half_board=None):
+
+    def recognize_chessboard(self, is_run_red=False, half_board=None):
         """
         识别整个棋盘状态 (使用 YOLO 检测器，包含高度信息)
         """
         print("🔍 开始识别棋盘...")
-        if self.parent.surrendered:
+
+        # 检查游戏状态
+        surrendered, paused = self.parent.check_game_state()
+        if surrendered:
             return
 
         # 创建结果目录
@@ -287,14 +309,11 @@ class ChessPlayFlowCamera():
             if not os.path.exists(result_dir):
                 os.makedirs(result_dir)
 
-
         # 识别红方半区
         if not half_board or half_board == "red":
             print("🔴 识别红方半区...")
             if is_run_red:
-    #             self.parent.urController.set_speed(0.8)
                 self.parent.urController.run_point_j(self.parent.args.red_camera_position)
-                # time.sleep(3)  # 等待稳定
 
             # 多次捕获取最佳图像和深度信息
             time.sleep(0.5)
@@ -305,22 +324,43 @@ class ChessPlayFlowCamera():
             self.update_camera_display(red_image)
 
             # 识别红方半区棋子 (使用 YOLO，包含高度信息)
-            self.red_result, red_detections,points_center = self.parent.detector.extract_chessboard_layout_with_height(
-                red_image, self.parent.chess_r,half_board="red",
-                conf_threshold=self.parent.args.conf,
-                iou_threshold=self.parent.args.iou
-            )
+            # 将耗时的YOLO识别过程放到独立线程中执行
+            def red_detection_task():
+                return self.parent.detector.extract_chessboard_layout_with_height(
+                    red_image, self.parent.chess_r, half_board="red",
+                    conf_threshold=self.parent.args.conf,
+                    iou_threshold=self.parent.args.iou
+                )
+
+            # 使用事件来同步等待识别结果
+            import threading
+            result_container = [None]  # 用于在线程间传递结果
+            detection_event = threading.Event()
+
+            def run_detection():
+                result_container[0] = red_detection_task()
+                detection_event.set()
+
+            detection_thread = threading.Thread(target=run_detection, daemon=True)
+            detection_thread.start()
+
+            # 等待识别完成，同时定期检查游戏状态
+            while not detection_event.is_set():
+                if self.parent.surrendered:
+                    return self.parent.chess_positions
+                time.sleep(0.01)  # 短暂等待
+
+            self.red_result, red_detections, points_center = result_container[0]
+
             if points_center:
                 self.parent.piece_pixel_positions.update(points_center)
             else:
                 asyncio.run(self.parent.speak_cchess("识别不到棋子"))
+
         if not half_board or half_board == "black":
             # 识别黑方半区
             print("⚫ 识别黑方半区...")
-    #         self.parent.urController.set_speed(0.8)
             self.parent.urController.run_point_j(self.parent.args.black_camera_position)
-            # time.sleep(3)  # 等待稳定
-    #         self.parent.urController.set_speed(0.5)
 
             # 多次捕获取最佳图像和深度信息
             time.sleep(0.5)
@@ -329,20 +369,42 @@ class ChessPlayFlowCamera():
                 print("⚠️ 无法捕获黑方图像")
                 return self.parent.chess_positions
 
-
-            self.update_camera_display( black_image)
+            self.update_camera_display(black_image)
 
             # 识别黑方半区棋子 (使用 YOLO，包含高度信息)
-            self.black_result, black_detections,points_center = self.parent.detector.extract_chessboard_layout_with_height(
-                black_image, self.parent.chess_b,half_board="black",
-                conf_threshold=self.parent.args.conf,
-                iou_threshold=self.parent.args.iou
-            )
+            # 将耗时的YOLO识别过程放到独立线程中执行
+            def black_detection_task():
+                return self.parent.detector.extract_chessboard_layout_with_height(
+                    black_image, self.parent.chess_b, half_board="black",
+                    conf_threshold=self.parent.args.conf,
+                    iou_threshold=self.parent.args.iou
+                )
+
+            # 使用事件来同步等待识别结果
+            import threading
+            result_container = [None]  # 用于在线程间传递结果
+            detection_event = threading.Event()
+
+            def run_detection():
+                result_container[0] = black_detection_task()
+                detection_event.set()
+
+            detection_thread = threading.Thread(target=run_detection, daemon=True)
+            detection_thread.start()
+
+            # 等待识别完成，同时定期检查游戏状态
+            while not detection_event.is_set():
+                if self.parent.surrendered:
+                    return self.parent.chess_positions
+                time.sleep(0.01)  # 短暂等待
+
+            self.black_result, black_detections, points_center = result_container[0]
 
             if points_center:
                 self.parent.piece_pixel_positions.update(points_center)
             else:
                 asyncio.run(self.parent.speak_cchess("识别不到棋子"))
+
         # 合并结果 (黑方在0-4行，红方在5-9行，且红方需要倒置)
         chess_result = [['.' for _ in range(9)] for _ in range(10)]
 

@@ -26,9 +26,13 @@ class ChessPlayFlowBranch():
             asyncio.run(self.parent.speak_cchess("开始收局"))
 
             while 1:
-#                 self.parent.urController.set_speed(0.8)
+                # 检查游戏状态
+                surrendered, paused = self.parent.check_game_state()
+                if surrendered:
+                    return
+
+
                 self.parent.urController.run_point_j(RCV_CAMERA)
-                # time.sleep(3)
 
                 # 1. 识别棋盒位置（支持3或4个圆）
                 chess_box_points = self.parent.cCamera.detect_chess_box(max_attempts=20)
@@ -42,21 +46,30 @@ class ChessPlayFlowBranch():
                 print("✅ 成功识别棋盒位置")
                 asyncio.run(self.parent.speak_cchess("成功识别棋盒位置"))
 
-                chess_box_points = np.array([[point[0],point[1]] for point in chess_box_points])
-                print("像素四角",chess_box_points)
+                chess_box_points = np.array([[point[0], point[1]] for point in chess_box_points])
+                print("像素四角", chess_box_points)
                 # 转换为世界坐标检查尺寸 注意镜像翻转
-                world_corner_0 = multi_camera_pixel_to_world(chess_box_points[2][0], chess_box_points[2][1], self.parent.inverse_matrix_r, "RCV_CAMERA" , use_tps=True) # 棋盒左上角
-                world_corner_1 = multi_camera_pixel_to_world(chess_box_points[3][0], chess_box_points[3][1], self.parent.inverse_matrix_r,  "RCV_CAMERA", use_tps=True) # 棋盒右上角
-                world_corner_2 = multi_camera_pixel_to_world(chess_box_points[0][0], chess_box_points[0][1], self.parent.inverse_matrix_r, "RCV_CAMERA", use_tps=True) # 棋盒右下角
-                world_corner_3 = multi_camera_pixel_to_world(chess_box_points[1][0], chess_box_points[1][1], self.parent.inverse_matrix_r, "RCV_CAMERA", use_tps=True) # 棋盒左下角
+                world_corner_0 = multi_camera_pixel_to_world(chess_box_points[2][0], chess_box_points[2][1],
+                                                             self.parent.inverse_matrix_r, "RCV_CAMERA",
+                                                             use_tps=True)  # 棋盒左上角
+                world_corner_1 = multi_camera_pixel_to_world(chess_box_points[3][0], chess_box_points[3][1],
+                                                             self.parent.inverse_matrix_r, "RCV_CAMERA",
+                                                             use_tps=True)  # 棋盒右上角
+                world_corner_2 = multi_camera_pixel_to_world(chess_box_points[0][0], chess_box_points[0][1],
+                                                             self.parent.inverse_matrix_r, "RCV_CAMERA",
+                                                             use_tps=True)  # 棋盒右下角
+                world_corner_3 = multi_camera_pixel_to_world(chess_box_points[1][0], chess_box_points[1][1],
+                                                             self.parent.inverse_matrix_r, "RCV_CAMERA",
+                                                             use_tps=True)  # 棋盒左下角
 
-                topLeft = world_corner_0[0]     - 0 , world_corner_0[1]  + 5
-                topRight = world_corner_1[0]    + 0  , world_corner_1[1] + 5
-                bottomRight = world_corner_2[0] + 0  , world_corner_2[1] - 5
-                bottomLeft = world_corner_3[0]  - 0 , world_corner_3[1]  - 5
+                topLeft = world_corner_0[0] - 0, world_corner_0[1] + 5
+                topRight = world_corner_1[0] + 0, world_corner_1[1] + 5
+                bottomRight = world_corner_2[0] + 0, world_corner_2[1] - 5
+                bottomLeft = world_corner_3[0] - 0, world_corner_3[1] - 5
                 chess_box_points = [topLeft, topRight, bottomRight, bottomLeft]
 
-                if not self.parent.urController.is_point_reachable(bottomLeft[0], bottomLeft[1], POINT_RCV_DOWN[1] + 20):
+                if not self.parent.urController.is_point_reachable(bottomLeft[0], bottomLeft[1],
+                                                                   POINT_RCV_DOWN[1] + 20):
                     print("机械臂无法到达棋盒，请重新放置到靠近机械臂的位置！")
                     asyncio.run(self.parent.speak_cchess("机械臂无法到达棋盒，请重新放置到靠近机械臂的位置！"))
                     raise ValueError("机械臂无法到达棋盒，请将棋盒放置到靠近机械臂的位置")
@@ -92,6 +105,7 @@ class ChessPlayFlowBranch():
             print(e)
             asyncio.run(self.parent.speak_cchess("收局失败"))
             time.sleep(5)
+
     def collect_half_board_pieces(self, side, collection_positions):
         """
         收集指定颜色的棋子到棋盒
@@ -307,7 +321,6 @@ class ChessPlayFlowBranch():
 
         # 移动到拍照点
         self.parent.urController.run_point_j(camera_position)
-        # time.sleep(3)
 
         # 捕获图像
         image, depth = self.parent.cCamera.capture_stable_image(is_chessboard=False)
@@ -365,13 +378,19 @@ class ChessPlayFlowBranch():
                 ['P', '.', 'P', '.', 'P', '.', 'P', '.', 'P'],  # 6行 红方
                 ['.', 'C', '.', '.', '.', '.', '.', 'C', '.'],  # 7行
                 ['.', '.', '.', '.', '.', '.', '.', '.', '.'],  # 8行
-                ['R', 'N', 'B', 'A', 'K', 'A', 'B', 'N', 'R']   # 9行
+                ['R', 'N', 'B', 'A', 'K', 'A', 'B', 'N', 'R']  # 9行
             ]
 
             # 1. 处理上层黑方棋子
             print("⚫ 处理上层黑方棋子...")
             asyncio.run(self.parent.speak_cchess("正在布置黑方棋子"))
             for i in range(20):
+                # 检查游戏状态
+                surrendered, paused = self.parent.check_game_state()
+                if surrendered:
+                    return
+
+
                 if self.setup_half_board_pieces("black", initial_layout):
                     break
                 time.sleep(10)
@@ -380,6 +399,12 @@ class ChessPlayFlowBranch():
             print("🔴 处理下层红方棋子...")
             asyncio.run(self.parent.speak_cchess("正在布置红方棋子"))
             for i in range(20):
+                # 检查游戏状态
+                surrendered, paused = self.parent.check_game_state()
+                if surrendered:
+                    return
+
+
                 if self.setup_half_board_pieces("red", initial_layout):
                     break
                 time.sleep(10)
@@ -400,7 +425,6 @@ class ChessPlayFlowBranch():
         # 移动到收子区拍照点
 #         self.parent.urController.set_speed(0.8)
         self.parent.urController.run_point_j(RCV_CAMERA)
-        # time.sleep(3)
         # 捕获图像和深度信息
         rcv_image, rcv_depth = self.parent.cCamera.capture_stable_image(is_chessboard=False)
         if rcv_image is None:
@@ -530,26 +554,21 @@ class ChessPlayFlowBranch():
 
             # 移动到棋子上方
             self.parent.urController.move_to(x_world, y_world, pick_height+20)
-#             time.sleep(1)
 
             # 降低到吸取高度
 #             self.parent.urController.set_speed(0.5)
             self.parent.urController.move_to(x_world, y_world, pick_height)
-#             time.sleep(1)
 
             # 吸取棋子
             self.parent.urController.set_do(IO_QI, 1)  # 吸合
-            # time.sleep
 
 
             # 抬起棋子到安全高度
 #             self.parent.urController.set_speed(0.8)
             self.parent.urController.move_to(x_world, y_world, pick_height+20)
-#             time.sleep(1)
 
             # 移动到中心点
             self.parent.urController.move_to(rcv_world_x, rcv_world_y, pick_height+50)
-#             time.sleep(2)
 
             # 移动到棋盘上方
             col = 9 if side == "black" else 0
@@ -557,22 +576,18 @@ class ChessPlayFlowBranch():
 
             # 移动到目标位置上方
             self.parent.urController.move_to(x_world_target, y_world_target, place_height+20)
-#             time.sleep(1)
 
             # 降低到放置高度
 #             self.parent.urController.set_speed(0.5)
             self.parent.urController.move_to(x_world_target, y_world_target, place_height+5)
-#             time.sleep(1)
 
             # 放置棋子
             self.parent.urController.set_do(IO_QI, 0)
-#             time.sleep(1)
             self.parent.urController.move_to(x_world_target, y_world_target, place_height+20)
 
             # 抬起机械臂到安全高度
 #             self.parent.urController.set_speed(0.8)
             self.parent.cMove.move_home(col)
-#             time.sleep(1)
 
             print(f"✅ {side}方棋子{target_piece}已放置到位置({target_row},{target_col})")
         return True

@@ -88,11 +88,15 @@ class ChessPlayFlowInit():
         self.point_home = self.args.red_camera_position # 红黑拍照点
         self.pipeline = None # 相机
         self.chessboard_image = None # 棋盘图片
-        self.surrendered = False  # 添加投降标志
-        self._game_paused = False  # 添加游戏暂停标志
         self.human_move_by_voice =  False # 是否使用语音控制落子
         self.is_playing = False # 是否人类正在落子
         self.box_center = [RCV_CAMERA[0],RCV_CAMERA[1]] # 棋盒中心点
+
+        # 状态管理
+        self.game_state = 'start' # 状态管理
+        self.surrendered = False  # 添加投降标志
+        self._game_paused = False  # 添加游戏暂停标志
+        self._stop_event = threading.Event()  # 添加停止事件，用于立即停止所有操作
 
         # 棋盘状态
         self.sac_nums = 0 # 吃子数量
@@ -168,14 +172,45 @@ class ChessPlayFlowInit():
         self.cUtils = ChessPlayFlowUtils(self)
         self.cMove = ChessPlayFlowMove(self)
         self.cBranch = ChessPlayFlowBranch(self)
+
+
+    # 状态管理
+    def pause_thread(self,seconds=1):
+
+        time.sleep(seconds)
+
+        print("暂停结束")
+    def check_game_state(self,is_wait=True):
+        """
+        统一检查游戏状态，用于快速响应投降或暂停
+        Returns:
+            tuple: (should_stop, should_pause)
+        """
+        # 检查是否收到停止信号
+        if self._stop_event.is_set() or self.surrendered:
+            return True, False
+        if is_wait:
+            self.wait_while_paused()
+        return self.surrendered, self._game_paused
+
+    def wait_while_paused(self):
+        """
+        等待游戏从暂停状态恢复
+        """
+        while self._game_paused and not self.surrendered and not self._stop_event.is_set():
+            time.sleep(0.1)  # 短暂休眠避免过度占用CPU
+        return self.surrendered or self._stop_event.is_set()
+
     def set_surrendered(self):
         """认输"""
         self.surrendered = True
+        self._stop_event.set()  # 设置停止事件
         time.sleep(3)
-        self.urController.hll()
+        if self.urController:
+            self.urController.hll()
 
 
-    # 语音
+    # 语音播报
     async def speak_cchess(self, text):
         """
         使用统一的TTS管理器进行异步语音播报
@@ -197,86 +232,427 @@ class ChessPlayFlowInit():
             print(f"⚠️ 语音播报失败: {e}")
             # 不中断程序执行
             pass
+
+    # 初始化
+
+    def init_camera(self):
+        """
+        初始化RealSense相机（支持彩色和深度流）
+        """
+        try:
+            import pyrealsense2 as rs
+
+            # 如果已有pipeline，先停止并释放
+            if hasattr(self, 'pipeline') and self.pipeline is not None:
+                try:
+                    self.pipeline.stop()
+                except:
+                    pass
+                self.pipeline = None
+
+            self.pipeline = rs.pipeline()
+            config = rs.config()
+
+            # 启用彩色流
+            config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 6)
+            # 启用深度流
+            config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 6)
+
+            # 启动相机
+            profile = self.pipeline.start(config)
+
+            sensors = profile.get_device().query_sensors()
+            for sensor in sensors:
+                if sensor.get_info(rs.camera_info.name) == "RGB Camera":
+                    print("Setting RGB Camera default parameters...")
+                    # 设置默认参数
+                    if sensor.supports(rs.option.exposure):
+                        # sensor.set_option(rs.option.exposure, 300) # 曝光时间（单位：微秒）
+                        sensor.set_option(rs.option.auto_exposure_priority, True)
+                    # ✅ 启用自动对焦
+                    if sensor.supports(rs.option.enable_auto_exposure):
+                        sensor.set_option(rs.option.enable_auto_exposure, True)
+                    if sensor.supports(rs.option.sharpness):
+                        sensor.set_option(rs.option.sharpness, 100)
+                    # 启用 Decimation Filter（降采样滤镜）
+                    if sensor.supports(rs.option.filter_magnitude):
+                        sensor.set_option(rs.option.filter_magnitude, 1)
+
+            # 等待相机稳定
+            # time.sleep(2)
+            print("✅ 相机初始化完成（支持深度信息）")
+            return True
+
+        except Exception as e:
+            print(f"⚠️ 相机初始化失败: {e}")
+            self.pipeline = None
+            return False
+
+    def initialize_chessboard_points(self):
+        """
+        初始化棋盘所有点位坐标
+        根据WORLD_POINTS_R和WORLD_POINTS_B创建存储棋盘所有点位的参数
+        """
+        print("_INITIALIZING_CHESSBOARD_POINTS_...")
+
+        # 初始化红方和黑方的棋盘点位字典
+        self.red_board_points = {}
+        self.black_board_points = {}
+
+        red_top_left = np.array(WORLD_POINTS_R[1])      # 右上
+        red_top_right = np.array(WORLD_POINTS_R[2])     # 右下
+        red_bottom_left = np.array(WORLD_POINTS_R[0])   # 左上
+        red_bottom_right = np.array(WORLD_POINTS_R[3])  # 左下
+
+        # 计算红方区域的棋盘点位 (0-4行)
+        for row in range(5):  # 0-4行对应红方
+            for col in range(9):  # 0-8列
+                # 计算在红方区域中的相对位置
+                # 行从上到下: 0->1, 4->0
+                u = col / 8.0  # 列比例 0-1
+                v = row / 4.0  # 行比例 0-1
+
+                # 顶部线性插值
+                top_point = red_top_left + u * (red_top_right - red_top_left)
+                # 底部线性插值
+                bottom_point = red_bottom_left + u * (red_bottom_right - red_bottom_left)
+                # 垂直插值
+                point = bottom_point + v * (top_point - bottom_point)
+
+                # 存储为 (行, 列) 格式
+                self.red_board_points[(row, col)] = tuple(point)
+
+        black_top_left = np.array(WORLD_POINTS_B[1])      # 右上
+        black_top_right = np.array(WORLD_POINTS_B[2])     # 右下
+        black_bottom_left = np.array(WORLD_POINTS_B[0])   # 左上
+        black_bottom_right = np.array(WORLD_POINTS_B[3])  # 左下
+
+        # 计算黑方区域的棋盘点位 (5-9行)
+        for row in range(5, 10):  # 5-9行对应黑方
+            for col in range(9):  # 0-8列
+                # 计算在黑方区域中的相对位置
+                # 行从上到下: 5->0, 9->1
+                u = col / 8.0  # 列比例 0-1
+                v = (row - 5) / 4.0  # 行比例 0-1 (转换为0-4范围再归一化)
+
+                # 顶部线性插值
+                top_point = black_top_left + u * (black_top_right - black_top_left)
+                # 底部线性插值
+                bottom_point = black_bottom_left + u * (black_bottom_right - black_bottom_left)
+                # 垂直插值
+                point = bottom_point + v * (top_point - bottom_point)
+
+                # 存储为 (行, 列) 格式
+                self.black_board_points[(row, col)] = tuple(point)
+
+        # 合并所有棋盘点位到一个字典中
+        self.chessboard_points = {}
+        self.chessboard_points.update(self.red_board_points)
+        self.chessboard_points.update(self.black_board_points)
+
+        print(f"✅ 棋盘点位初始化完成")
+        print(f"   红方点位数量: {len(self.red_board_points)}")
+        print(f"   黑方点位数量: {len(self.black_board_points)}")
+        print(f"   总点位数量: {len(self.chessboard_points)}")
+
+    # 线程
+    def start_io_monitoring(self):
+        """
+        启动IO监控线程，监控启动/停止/复位按钮
+        """
+        # 初始化时停止灯亮，启动和复位灯暗
+
+        self.urController.hll(IO_STOP,[IO_START,IO_STOP,IO_RESET]) # 停止灯亮
+
+        self.io_monitoring = True
+        self.io_monitor_thread = threading.Thread(target=self._monitor_io_buttons, daemon=True)
+        self.io_monitor_thread.start()
+        print("🔔 IO监控线程已启动")
+
+    def _monitor_io_buttons(self):
+        """--
+        监控IO按钮的线程函数
+        """
+        last_states = {IO_START: 0, IO_STOP: 0, IO_RESET: 0}
+        while self.io_monitoring:
+            try:
+                # 检查启动按钮
+                result = self.urController.get_dis(IO_START,IO_STOP,IO_RESET)
+                start_state,stop_state,reset_state = result
+                # print(f"IO状态: 启动={start_state}, 停止={stop_state}, 复位={reset_state}")
+                if start_state == 1 and last_states[IO_START] == 0:
+                    print("🎮 检测到启动信号")
+                    # self._handle_start_game()
+                    threading.Thread(target=self._handle_start_game, daemon=True).start()
+                last_states[IO_START] = start_state
+
+                # 检查停止按钮
+                if stop_state == 1 and last_states[IO_STOP] == 0:
+                    print("⏹️ 检测到停止信号")
+                    # self._handle_stop_game()
+                    threading.Thread(target=self._handle_stop_game, daemon=True).start()
+                last_states[IO_STOP] = stop_state
+
+                # 检查复位按钮
+                if reset_state == 1 and last_states[IO_RESET] == 0:
+                    print("🔄 检测到复位信号")
+                    # self._handle_reset_board()
+                    threading.Thread(target=self._handle_reset_board, daemon=True).start()
+                last_states[IO_RESET] = reset_state
+
+                time.sleep(0.01)  # 100ms检查一次
+
+            except Exception as e:
+                print(f"⚠️ IO监控线程异常: {e}")
+                time.sleep(0.1)
+
+    def _handle_start_game(self):
+        """
+        处理启动游戏事件
+        """
+        # 只有在暂停状态下才能启动
+        if hasattr(self, '_game_paused') and self._game_paused:
+            print("🚀 继续对弈游戏")
+            try:
+                try:
+                    # 设置启动灯亮，其他灯暗
+                    self.urController.hll(IO_START, [IO_START, IO_STOP, IO_RESET])
+                    self.urController.resume()
+                    print("✅ 机械臂脚本已恢复")
+                except Exception as e:
+                    print(f"⚠️ 恢复机械臂脚本时出错: {e}")
+                if self._game_paused:
+                    self._game_paused = False
+
+                    # 如果有暂停的移动操作，继续执行
+                    if hasattr(self, '_paused_move') and self._paused_move:
+                        move_uci = self._paused_move
+                        self._paused_move = None
+                        self.cMove.execute_move(move_uci)
+
+                    asyncio.run(self.speak_cchess("游戏继续"))
+
+            except Exception as e:
+                print(f"❌ 启动游戏失败: {e}")
+        else:
+            print("ℹ️ 游戏未处于暂停状态，无需继续")
+
+
+    def _handle_stop_game(self):
+        """
+        处理停止游戏事件
+        """
+        print("✋ 停止对弈游戏")
+        try:
+            # 设置停止灯亮，其他灯暗
+            self.urController.hll(IO_STOP,[IO_START,IO_STOP,IO_RESET])  # 启动灯暗，停止灯亮
+            if not self._game_paused:
+                self._game_paused = True
+
+                # 停止机械臂当前所有动作
+                self.urController.pause()
+
+                asyncio.run(self.speak_cchess("游戏已暂停"))
+
+        except Exception as e:
+            print(f"❌ 停止游戏失败: {e}")
+
+    def _handle_reset_board(self):
+        """
+        处理复位棋盘事件
+        """
+        print("🔄 复位棋盘到初始状态")
+        try:
+            # 检查停止灯是否为暗（即游戏是否在运行）
+            # 如果游戏正在进行中，则不执行复位
+            if not (hasattr(self, '_game_paused') and self._game_paused):
+                print("ℹ️ 游戏正在运行，无法执行复位操作")
+                return
+
+            # 设置复位灯闪烁，其他灯暗
+            self.urController.hll()  # 所有灯先暗
+
+            # 启动复位灯闪烁线程
+            def blink_reset_light():
+                for i in range(10):  # 最多闪烁10次
+                    if not self._resetting:
+                        break
+                    self.urController.set_do(IO_RESET, 1)
+                    time.sleep(0.5)
+                    self.urController.set_do(IO_RESET, 0)
+                    time.sleep(0.5)
+
+            self._resetting = True
+            blink_thread = threading.Thread(target=blink_reset_light)
+            blink_thread.daemon = True
+            blink_thread.start()
+
+            # 执行棋盘还原成初始状态
+            self.cBranch.collect_pieces_at_end()
+            self.cBranch.setup_initial_board()
+
+            # 复位完成，停止闪烁
+            self._resetting = False
+            blink_thread.join(timeout=1)
+
+            # 设置复位灯亮，其他灯暗
+            self.urController.hll(IO_RESET,[IO_START,IO_STOP,IO_RESET])
+            asyncio.run(self.speak_cchess("棋盘已复位"))
+
+            # 重置游戏状态
+            self._game_paused = False
+            if hasattr(self, '_paused_move'):
+                self._paused_move = None
+
+        except Exception as e:
+            print(f"❌ 棋盘复位失败: {e}")
+            self._resetting = False
+
+
+    def stop_io_monitoring(self):
+        """
+        停止IO监控线程
+        """
+        self.io_monitoring = False
+        if self.io_monitor_thread and self.io_monitor_thread.is_alive():
+            self.io_monitor_thread.join(timeout=2)
+        print("🔕 IO监控线程已停止")
+
+class ChessPlayFlow(ChessPlayFlowInit):
+
+    # 主函数
+    def set_side(self):
+        if self.side == 'red':
+            self.side = 'black'
+        else:
+            self.side = 'red'
+    def _init_play_game(self):
+        self.his_chessboard = {} # 历史棋盘
+        # 识别的棋盘
+        self.chess_positions = [                            # 使用数组坐标系
+            ['r', 'n', 'b', 'a', 'k', 'a', 'b', 'n', 'r'],  # 0行 黑方
+            ['.', '.', '.', '.', '.', '.', '.', '.', '.'],  # 1行
+            ['.', 'c', '.', '.', '.', '.', '.', 'c', '.'],  # 2行
+            ['p', '.', 'p', '.', 'p', '.', 'p', '.', 'p'],  # 3行
+            ['.', '.', '.', '.', '.', '.', '.', '.', '.'],  # 4行
+            ['.', '.', '.', '.', '.', '.', '.', '.', '.'],  # 5行
+            ['P', '.', 'P', '.', 'P', '.', 'P', '.', 'P'],  # 6行 红方
+            ['.', 'C', '.', '.', '.', '.', '.', 'C', '.'],  # 7行
+            ['.', '.', '.', '.', '.', '.', '.', '.', '.'],  # 8行
+            ['R', 'N', 'B', 'A', 'K', 'A', 'B', 'N', 'R']   # 9行
+        ]
+        self.previous_positions = self.chess_positions # 现在的棋盘
+        self.move_history = []
+        self.board = cchess.Board()
+        self.game = Game(self.board)
+        self.surrendered = False
+        self.captured_pieces_history = {}  # 记录被吃的棋子信息
+        self.is_undo = False  # 添加悔棋标志
+        self.move_count = 0
+        self.move_uci = ''
+
+        # 初始化MainGame
+        self.maingame.restart_game()
+
+        # 显示初始棋盘
+        if self.args.show_board:
+            self.game.graphic(self.board)
+
+    # 语音事件
     def handle_voice_command(self, keywords, full_text):
         """
         处理语音命令 - 支持象棋移动命令的专用识别
         """
         print(f"识别到语音命令: {full_text}")
-        if not self.is_playing:
-            # asyncio.run(self.speak_cchess("还没轮到您的回合"))
-            return None
         speech_recognizer = get_speech_recognizer()
-        # 游戏控制命令
-        if "悔棋" in full_text or "会 七" in full_text:
-            asyncio.run(self.speak_cchess("执行悔棋"))
-            # 设置悔棋标志
-            self.cBranch.undo_move()
-            return None
 
-        elif "帮助" in full_text:
+        # 游戏控制命令
+        if "帮助" in full_text:
             asyncio.run(self.speak_cchess("您可以使用语音控制游戏，说开始、结束、悔棋等命令"))
             return None
 
-        elif "认输" in full_text or "投降" in full_text:
-            asyncio.run(self.speak_cchess("执行认输"))
-            self.set_surrendered()
+        if '开始' in full_text :
+            self.play_game()
+            return  None
+        if '停止' in full_text or '暂停' in full_text:
+            self._handle_stop_game()
             return None
-        # 添加收子关键字相关回调事件
-        elif "收子" in full_text:
-            asyncio.run(self.speak_cchess("执行收子"))
-            try:
-                # 调用收子方法
-                self.cBranch.collect_pieces_at_end()
-            except Exception as e:
-                asyncio.run(self.speak_cchess("收子操作失败"))
-                print(f"收子操作失败: {e}")
+        elif '启动' in full_text or '继续' in full_text:
+            self._handle_start_game()
+            return None
+        elif '复位' in full_text or '重启' in full_text:
+            self._handle_reset_board()
+            return None
 
-        # 添加布局关键字相关回调事件
-        elif "布局" in full_text or "摆子" in full_text:
-            asyncio.run(self.speak_cchess("执行初始布局操作"))
-            try:
-                # 调用布局方法
-                self.cBranch.setup_initial_board()
-            except Exception as e:
-                asyncio.run(self.speak_cchess("布局操作失败"))
-                print(f"布局操作失败: {e}")
+        if self.game_state == 'start':
+            # 添加收子关键字相关回调事件
+            if "收子" in full_text:
+                asyncio.run(self.speak_cchess("执行收子"))
+                try:
+                    # 调用收子方法
+                    self.cBranch.collect_pieces_at_end()
+                except Exception as e:
+                    asyncio.run(self.speak_cchess("收子操作失败"))
+                    print(f"收子操作失败: {e}")
+            # 添加布局关键字相关回调事件
+            elif "布局" in full_text or "摆子" in full_text:
+                asyncio.run(self.speak_cchess("执行初始布局操作"))
+                try:
+                    # 调用布局方法
+                    self.cBranch.setup_initial_board()
+                except Exception as e:
+                    asyncio.run(self.speak_cchess("布局操作失败"))
+                    print(f"布局操作失败: {e}")
 
-        # 如果当前不是机器人回合，且不是语音控制移动状态
-        elif self.side != self.args.robot_side and not self.human_move_by_voice:
-            # 检查是否是象棋移动命令（包含棋子名称）
-            piece_chars = ['进','退','平','车', '马', '炮', '象', '相', '士', '仕', '将', '帅', '兵', '卒']
+        if self.game_state == 'running':
+            if "认输" in full_text or "投降" in full_text:
+                asyncio.run(self.speak_cchess("执行认输"))
+                self.set_surrendered()
+                return None
+            if not self.is_playing:
+                # asyncio.run(self.speak_cchess("还没轮到您的回合"))
+                return None
+            if "悔棋" in full_text or "会 七" in full_text:
+                asyncio.run(self.speak_cchess("执行悔棋"))
+                # 设置悔棋标志
+                self.cBranch.undo_move()
+                return None
 
-            # 检查文本是否包含棋子字符
-            if any(piece in full_text for piece in piece_chars):
-                # 获取语音识别器实例
-                if speech_recognizer:
+            # 如果当前不是机器人回合，且不是语音控制移动状态
+            if self.side != self.args.robot_side and not self.human_move_by_voice:
+                # 检查是否是象棋移动命令（包含棋子名称）
+                piece_chars = ['进','退','平','车', '马', '炮', '象', '相', '士', '仕', '将', '帅', '兵', '卒']
 
-                    # 解析中文记谱法
-                    start_time = time.time()
-                    chinese_notation = full_text.strip()
-                    move_uci = self.cUtils.parse_chinese_notation(chinese_notation)
-                    time_1 = time.time()
-                    print("解析中文记谱法", time_1 - start_time)
+                # 检查文本是否包含棋子字符
+                if any(piece in full_text for piece in piece_chars):
+                    # 获取语音识别器实例
+                    if speech_recognizer:
 
-                    if not move_uci:
-                        return False
+                        # 解析中文记谱法
+                        start_time = time.time()
+                        chinese_notation = full_text.strip()
+                        move_uci = self.cUtils.parse_chinese_notation(chinese_notation)
+                        time_1 = time.time()
+                        print("解析中文记谱法", time_1 - start_time)
 
-                    # 执行移动
-                    success = self.cMove.execute_updata_move(move_uci)
-                    if success:
-                        # 语音移动成功后设置标志以退出人类回合
-                        self.human_move_by_voice = True
-                    else:
-                        asyncio.run(self.speak_cchess("非法移动，无法执行"))
-                        return False
+                        if not move_uci:
+                            return False
 
-                    print(f"语音命令执行移动: {chinese_notation} -> {move_uci}")
-                    asyncio.run(self.speak_cchess(f"执行移动 {chinese_notation}"))
+                        # 执行移动
+                        success = self.cMove.execute_updata_move(move_uci)
+                        if success:
+                            # 语音移动成功后设置标志以退出人类回合
+                            self.human_move_by_voice = True
+                        else:
+                            asyncio.run(self.speak_cchess("非法移动，无法执行"))
+                            return False
+
+                        print(f"语音命令执行移动: {chinese_notation} -> {move_uci}")
+                        asyncio.run(self.speak_cchess(f"执行移动 {chinese_notation}"))
+                else:
+                    return  False
             else:
-                return  False
-        else:
-            return False
-
+                return False
     # 初始化
     def initialize(self):
         """
@@ -395,335 +771,26 @@ class ChessPlayFlowInit():
 
         asyncio.run(self.speak_cchess("系统初始化完成"))
 
-    def init_camera(self):
-        """
-        初始化RealSense相机（支持彩色和深度流）
-        """
-        try:
-            import pyrealsense2 as rs
-
-            # 如果已有pipeline，先停止并释放
-            if hasattr(self, 'pipeline') and self.pipeline is not None:
-                try:
-                    self.pipeline.stop()
-                except:
-                    pass
-                self.pipeline = None
-
-            self.pipeline = rs.pipeline()
-            config = rs.config()
-
-            # 启用彩色流
-            config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 6)
-            # 启用深度流
-            config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 6)
-
-            # 启动相机
-            profile = self.pipeline.start(config)
-
-            sensors = profile.get_device().query_sensors()
-            for sensor in sensors:
-                if sensor.get_info(rs.camera_info.name) == "RGB Camera":
-                    print("Setting RGB Camera default parameters...")
-                    # 设置默认参数
-                    if sensor.supports(rs.option.exposure):
-                        # sensor.set_option(rs.option.exposure, 300) # 曝光时间（单位：微秒）
-                        sensor.set_option(rs.option.auto_exposure_priority, True)
-                    # ✅ 启用自动对焦
-                    if sensor.supports(rs.option.enable_auto_exposure):
-                        sensor.set_option(rs.option.enable_auto_exposure, True)
-                    if sensor.supports(rs.option.sharpness):
-                        sensor.set_option(rs.option.sharpness, 100)
-                    # 启用 Decimation Filter（降采样滤镜）
-                    if sensor.supports(rs.option.filter_magnitude):
-                        sensor.set_option(rs.option.filter_magnitude, 1)
-
-            # 等待相机稳定
-            # time.sleep(2)
-            print("✅ 相机初始化完成（支持深度信息）")
-            return True
-
-        except Exception as e:
-            print(f"⚠️ 相机初始化失败: {e}")
-            self.pipeline = None
-            return False
-
-
-    def initialize_chessboard_points(self):
-        """
-        初始化棋盘所有点位坐标
-        根据WORLD_POINTS_R和WORLD_POINTS_B创建存储棋盘所有点位的参数
-        """
-        print("_INITIALIZING_CHESSBOARD_POINTS_...")
-
-        # 初始化红方和黑方的棋盘点位字典
-        self.red_board_points = {}
-        self.black_board_points = {}
-
-        red_top_left = np.array(WORLD_POINTS_R[1])      # 右上
-        red_top_right = np.array(WORLD_POINTS_R[2])     # 右下
-        red_bottom_left = np.array(WORLD_POINTS_R[0])   # 左上
-        red_bottom_right = np.array(WORLD_POINTS_R[3])  # 左下
-
-        # 计算红方区域的棋盘点位 (0-4行)
-        for row in range(5):  # 0-4行对应红方
-            for col in range(9):  # 0-8列
-                # 计算在红方区域中的相对位置
-                # 行从上到下: 0->1, 4->0
-                u = col / 8.0  # 列比例 0-1
-                v = row / 4.0  # 行比例 0-1
-
-                # 顶部线性插值
-                top_point = red_top_left + u * (red_top_right - red_top_left)
-                # 底部线性插值
-                bottom_point = red_bottom_left + u * (red_bottom_right - red_bottom_left)
-                # 垂直插值
-                point = bottom_point + v * (top_point - bottom_point)
-
-                # 存储为 (行, 列) 格式
-                self.red_board_points[(row, col)] = tuple(point)
-
-        black_top_left = np.array(WORLD_POINTS_B[1])      # 右上
-        black_top_right = np.array(WORLD_POINTS_B[2])     # 右下
-        black_bottom_left = np.array(WORLD_POINTS_B[0])   # 左上
-        black_bottom_right = np.array(WORLD_POINTS_B[3])  # 左下
-
-        # 计算黑方区域的棋盘点位 (5-9行)
-        for row in range(5, 10):  # 5-9行对应黑方
-            for col in range(9):  # 0-8列
-                # 计算在黑方区域中的相对位置
-                # 行从上到下: 5->0, 9->1
-                u = col / 8.0  # 列比例 0-1
-                v = (row - 5) / 4.0  # 行比例 0-1 (转换为0-4范围再归一化)
-
-                # 顶部线性插值
-                top_point = black_top_left + u * (black_top_right - black_top_left)
-                # 底部线性插值
-                bottom_point = black_bottom_left + u * (black_bottom_right - black_bottom_left)
-                # 垂直插值
-                point = bottom_point + v * (top_point - bottom_point)
-
-                # 存储为 (行, 列) 格式
-                self.black_board_points[(row, col)] = tuple(point)
-
-        # 合并所有棋盘点位到一个字典中
-        self.chessboard_points = {}
-        self.chessboard_points.update(self.red_board_points)
-        self.chessboard_points.update(self.black_board_points)
-
-        print(f"✅ 棋盘点位初始化完成")
-        print(f"   红方点位数量: {len(self.red_board_points)}")
-        print(f"   黑方点位数量: {len(self.black_board_points)}")
-        print(f"   总点位数量: {len(self.chessboard_points)}")
-
-    # 线程
-    def start_io_monitoring(self):
-        """
-        启动IO监控线程，监控启动/停止/复位按钮
-        """
-        # 初始化时停止灯亮，启动和复位灯暗
-
-        self.urController.hll(IO_STOP,[IO_START,IO_STOP,IO_RESET]) # 停止灯亮
-
-        self.io_monitoring = True
-        self.io_monitor_thread = threading.Thread(target=self._monitor_io_buttons)
-        self.io_monitor_thread.daemon = True
-        self.io_monitor_thread.start()
-        print("🔔 IO监控线程已启动")
-
-    def _monitor_io_buttons(self):
-        """
-        监控IO按钮的线程函数
-        """
-        last_states = {IO_START: 0, IO_STOP: 0, IO_RESET: 0}
-
-        while self.io_monitoring:
-            try:
-                # 检查启动按钮
-                start_state = self.urController.get_di(IO_START, is_log=False)
-                if start_state == 1 and last_states[IO_START] == 0:
-                    print("🎮 检测到启动信号")
-                    self._handle_start_game()
-                last_states[IO_START] = start_state
-
-                # 检查停止按钮
-                stop_state = self.urController.get_di(IO_STOP, is_log=False)
-                if stop_state == 1 and last_states[IO_STOP] == 0:
-                    print("⏹️ 检测到停止信号")
-                    self._handle_stop_game()
-                last_states[IO_STOP] = stop_state
-
-                # 检查复位按钮
-                reset_state = self.urController.get_di(IO_RESET, is_log=False)
-                if reset_state == 1 and last_states[IO_RESET] == 0:
-                    print("🔄 检测到复位信号")
-                    self._handle_reset_board()
-                last_states[IO_RESET] = reset_state
-
-                time.sleep(0.1)  # 100ms检查一次
-
-            except Exception as e:
-                print(f"⚠️ IO监控线程异常: {e}")
-                time.sleep(1)
-
-    def _handle_start_game(self):
-        """
-        处理启动游戏事件
-        """
-        # 只有在暂停状态下才能启动
-        if hasattr(self, '_game_paused') and self._game_paused:
-            print("🚀 继续对弈游戏")
-            try:
-                # 设置启动灯亮，其他灯暗
-                self.urController.hll(IO_START,[IO_START,IO_STOP,IO_RESET])  # 启动灯亮，停止灯暗
-                self._game_paused = False
-
-                # 如果有暂停的移动操作，继续执行
-                if hasattr(self, '_paused_move') and self._paused_move:
-                    move_uci = self._paused_move
-                    self._paused_move = None
-                    self.cMove.execute_move(move_uci)
-
-                asyncio.run(self.speak_cchess("游戏继续"))
-
-            except Exception as e:
-                print(f"❌ 启动游戏失败: {e}")
-        else:
-            print("ℹ️ 游戏未处于暂停状态，无需继续")
-
-
-    def _handle_stop_game(self):
-        """
-        处理停止游戏事件
-        """
-        print("✋ 停止对弈游戏")
-        try:
-            # 设置停止灯亮，其他灯暗
-            self.urController.hll(IO_STOP,[IO_START,IO_STOP,IO_RESET])  # 启动灯暗，停止灯亮
-            self._game_paused = True
-
-            # 停止机械臂当前所有动作
-            self.urController.dashboard.StopScript()
-
-            asyncio.run(self.speak_cchess("游戏已暂停"))
-
-        except Exception as e:
-            print(f"❌ 停止游戏失败: {e}")
-
-    def _handle_reset_board(self):
-        """
-        处理复位棋盘事件
-        """
-        print("🔄 复位棋盘到初始状态")
-        try:
-            # 检查停止灯是否为暗（即游戏是否在运行）
-            # 如果游戏正在进行中，则不执行复位
-            if not (hasattr(self, '_game_paused') and self._game_paused):
-                print("ℹ️ 游戏正在运行，无法执行复位操作")
-                return
-
-            # 设置复位灯闪烁，其他灯暗
-            self.urController.hll()  # 所有灯先暗
-
-            # 启动复位灯闪烁线程
-            def blink_reset_light():
-                for i in range(10):  # 最多闪烁10次
-                    if not self._resetting:
-                        break
-                    self.urController.set_do(IO_RESET, 1)
-                    time.sleep(0.5)
-                    self.urController.set_do(IO_RESET, 0)
-                    time.sleep(0.5)
-
-            self._resetting = True
-            blink_thread = threading.Thread(target=blink_reset_light)
-            blink_thread.daemon = True
-            blink_thread.start()
-
-            # 执行棋盘还原成初始状态
-            self.cBranch.collect_pieces_at_end()
-            self.cBranch.setup_initial_board()
-
-            # 复位完成，停止闪烁
-            self._resetting = False
-            blink_thread.join(timeout=1)
-
-            # 设置复位灯亮，其他灯暗
-            self.urController.hll(IO_RESET,[IO_START,IO_STOP,IO_RESET])
-            asyncio.run(self.speak_cchess("棋盘已复位"))
-
-            # 重置游戏状态
-            self._game_paused = False
-            if hasattr(self, '_paused_move'):
-                self._paused_move = None
-
-        except Exception as e:
-            print(f"❌ 棋盘复位失败: {e}")
-            self._resetting = False
-
-
-    def stop_io_monitoring(self):
-        """
-        停止IO监控线程
-        """
-        self.io_monitoring = False
-        if self.io_monitor_thread and self.io_monitor_thread.is_alive():
-            self.io_monitor_thread.join(timeout=2)
-        print("🔕 IO监控线程已停止")
-
-class ChessPlayFlow(ChessPlayFlowInit):
-
-    # 主函数
-    def set_side(self):
-        if self.side == 'red':
-            self.side = 'black'
-        else:
-            self.side = 'red'
-    def _init_play_game(self):
-        self.his_chessboard = {} # 历史棋盘
-        # 识别的棋盘
-        self.chess_positions = [                            # 使用数组坐标系
-            ['r', 'n', 'b', 'a', 'k', 'a', 'b', 'n', 'r'],  # 0行 黑方
-            ['.', '.', '.', '.', '.', '.', '.', '.', '.'],  # 1行
-            ['.', 'c', '.', '.', '.', '.', '.', 'c', '.'],  # 2行
-            ['p', '.', 'p', '.', 'p', '.', 'p', '.', 'p'],  # 3行
-            ['.', '.', '.', '.', '.', '.', '.', '.', '.'],  # 4行
-            ['.', '.', '.', '.', '.', '.', '.', '.', '.'],  # 5行
-            ['P', '.', 'P', '.', 'P', '.', 'P', '.', 'P'],  # 6行 红方
-            ['.', 'C', '.', '.', '.', '.', '.', 'C', '.'],  # 7行
-            ['.', '.', '.', '.', '.', '.', '.', '.', '.'],  # 8行
-            ['R', 'N', 'B', 'A', 'K', 'A', 'B', 'N', 'R']   # 9行
-        ]
-        self.previous_positions = self.chess_positions # 现在的棋盘
-        self.move_history = []
-        self.board = cchess.Board()
-        self.game = Game(self.board)
-        self.surrendered = False
-        self.captured_pieces_history = {}  # 记录被吃的棋子信息
-        self.is_undo = False  # 添加悔棋标志
-        self.move_count = 0
-        self.move_uci = ''
-
-        # 初始化MainGame
-        self.maingame.restart_game()
-
-        # 显示初始棋盘
-        if self.args.show_board:
-            self.game.graphic(self.board)
     def play_game(self):
         """
         执行完整对弈流程（修改版）
         """
+        # 重置停止事件
+        self._stop_event.clear()
+
         try:
             print("🎮 开始象棋对弈...")
-            self.urController.hll(IO_START,[IO_START,IO_STOP,IO_RESET])
+            self.game_state = "running"
+            self.urController.hll(IO_START, [IO_START, IO_STOP, IO_RESET])
             asyncio.run(self.speak_cchess("开始对弈，请等待指示灯为绿色再落子"))
 
             self._init_play_game()
-            # 修改循环条件，添加投降检查
-            while not self.board.is_game_over() and not self.surrendered:
-                if self.surrendered:
-                    return
+
+            # 修改循环条件，添加统一状态检查
+            while not self.board.is_game_over() and not self._stop_event.is_set():
+                # 检查游戏状态
+                if self.surrendered or self._stop_event.is_set():
+                    break
 
                 self.move_count += 1
                 print(f"\n--- 第 {self.move_count} 回合 ---")
@@ -738,18 +805,29 @@ class ChessPlayFlow(ChessPlayFlowInit):
                     self.cCamera.recognize_chessboard()
 
                     # 检查初始棋子位置
-                    while  self.cUtils.compare_chessboard_positions(self.previous_positions, self.chess_positions):
-                        if self.surrendered:
+                    while self.cUtils.compare_chessboard_positions(self.previous_positions, self.chess_positions):
+                        # 检查游戏状态
+                        surrendered, paused = self.check_game_state()
+                        if surrendered or self._stop_event.is_set():
                             return
+
                         # 如果棋子位置不正确，等待玩家调整
                         self.cMove.wait_for_player_adjustment()
+
                     while not self.cUtils.check_all_pieces_initial_position():
-                        if self.surrendered:
+                        # 检查游戏状态
+                        surrendered, paused = self.check_game_state()
+                        if surrendered or self._stop_event.is_set():
                             return
+
                         # 如果棋子位置不正确，等待玩家调整
                         self.cMove.wait_for_player_adjustment()
 
                 if is_robot_turn:
+                    # 检查游戏状态
+                    surrendered, paused = self.check_game_state()
+                    if surrendered or self._stop_event.is_set():
+                        break
 
                     self.urController.hll(5)  # 红灯
                     print(f"🤖 机器人回合")
@@ -762,7 +840,7 @@ class ChessPlayFlow(ChessPlayFlowInit):
 
                     # 4. 计算下一步
                     move_uci = self.cUtils.calculate_next_move()
-                    if not move_uci:
+                    if not move_uci or self._stop_event.is_set():
                         return
 
                     # 6. 执行移动到棋盘对象
@@ -776,15 +854,16 @@ class ChessPlayFlow(ChessPlayFlowInit):
 
                     # 5. 执行移动
                     self.cMove.execute_move(move_uci)
+                    if self._stop_event.is_set():
+                        return
                     self.move_history.append(move_uci)
 
                     print(f"当前{self.side}方")
                     self.set_side()
                     print(f"当前{self.side}方")
 
-
                     # 检查是否将军
-                    if self.cUtils.is_in_check(self.board,self.side):
+                    if self.cUtils.is_in_check(self.board, self.side):
                         asyncio.run(self.speak_cchess("请注意，您已被将军！"))
 
                     self.cMove.updat_previous_positions_after_move(move_uci)
@@ -803,27 +882,35 @@ class ChessPlayFlow(ChessPlayFlowInit):
                     asyncio.run(self.speak_cchess("轮到您的回合，请落子"))
                     print("⏳ 等待人类落子完成信号...")
 
-                    # 修改等待逻辑，添加投降检查
-                    while not self.urController.get_di(IO_SIDE, is_log=False) and not self.surrendered:
+                    # 修改等待逻辑，添加统一状态检查
+                    while not self.urController.get_di(IO_SIDE, is_log=False) and not self._stop_event.is_set():
+                        # 检查游戏状态
+                        surrendered, paused = self.check_game_state()
+                        if surrendered or self._stop_event.is_set():
+                            break
+
                         self.is_playing = True
                         time.sleep(0.5)
                         if self.human_move_by_voice:
                             break
-                        if self.surrendered:
-                            return
                         if self.is_undo:
                             break
+
                     self.is_playing = False
+
+                    # 再次检查游戏状态
+                    surrendered, paused = self.check_game_state()
+                    if surrendered or self._stop_event.is_set():
+                        break
+
                     if self.human_move_by_voice:
                         self.human_move_by_voice = False
                         continue
                     if self.is_undo:
                         self.is_undo = False
                         continue
-                        # 检查是否投降
-                    if self.surrendered:
-                        self.gama_over('surrender')
-                        return
+                    if self._stop_event.is_set():
+                        break
 
                     # 复位信号
                     self.urController.hll(5)  # 红灯
@@ -833,25 +920,34 @@ class ChessPlayFlow(ChessPlayFlowInit):
 
                     # 识别当前棋盘状态以更新棋盘
                     print("🔍 识别棋盘以更新状态...")
-                    self.his_chessboard[self.move_count-1] = copy.deepcopy(self.previous_positions)
-                    # old_positions = self.previous_positions
-                    # if self.move_count == 1:
-                    #     old_positions = self.chess_positions
+                    self.his_chessboard[self.move_count - 1] = copy.deepcopy(self.previous_positions)
+
                     for i in range(10):
+                        # 检查游戏状态
+                        surrendered, paused = self.check_game_state()
+                        if surrendered or self._stop_event.is_set():
+                            return
+
                         if i > 0:
                             positions = self.cCamera.recognize_chessboard(True)
                         else:
                             positions = self.cCamera.recognize_chessboard(True)
                         # 推断人类的移动
-                        self.move_uci = self.cUtils.infer_human_move(self.his_chessboard[self.move_count-1], positions)
+                        self.move_uci = self.cUtils.infer_human_move(self.his_chessboard[self.move_count - 1],
+                                                                     positions)
                         if self.move_uci:
                             break
+
+                    if self._stop_event.is_set():
+                        return
+
                     if self.move_uci:
                         print(f"✅ 人类推测走子: {self.move_uci}")
                         move = cchess.Move.from_uci(self.move_uci)
                         if move in self.board.legal_moves:
                             # 检查是否吃掉了机器人的将军
-                            is_captured, king_side = self.cUtils.is_king_captured_by_move(self.move_uci, self.previous_positions)
+                            is_captured, king_side = self.cUtils.is_king_captured_by_move(self.move_uci,
+                                                                                          self.previous_positions)
                             # 如果吃掉的是机器人的将/帅
                             if is_captured and king_side == self.args.robot_side:
                                 self.gama_over('player')  # 人类玩家获胜
@@ -862,7 +958,7 @@ class ChessPlayFlow(ChessPlayFlowInit):
 
                         else:
                             # 检查是否被将军且无法解除将军状态
-                            if self.cUtils.is_in_check(self.board,self.args.robot_side):
+                            if self.cUtils.is_in_check(self.board, self.args.robot_side):
                                 # 移动无效，执行空移动
                                 self.board.push(cchess.Move.null())
 
@@ -910,32 +1006,34 @@ class ChessPlayFlow(ChessPlayFlowInit):
 
                     self.set_side()
 
-
             # 游戏结束
-            if self.board.is_game_over() or self.surrendered:
-                # 如果是投降结束的游戏
-                if self.surrendered:
-                    self.gama_over('surrender')
-                else:
-                    # 正常游戏结束
-                    outcome = self.board.outcome()
-                    if outcome is not None:
-                        winner = "red" if outcome.winner == cchess.RED else "black"
-                        print(f"获胜方是{winner}")
-                        if winner == self.args.robot_side:
-                            asyncio.run(self.speak_cchess("您已被将死！"))
-                            self.gama_over('dobot')
-                        else:
-                            self.gama_over()
+            if self.surrendered or self._stop_event.is_set():
+                self.gama_over('surrender')
+            else:
+                # 正常游戏结束
+                outcome = self.board.outcome()
+                if outcome is not None:
+                    winner = "red" if outcome.winner == cchess.RED else "black"
+                    print(f"获胜方是{winner}")
+                    if winner == self.args.robot_side:
+                        asyncio.run(self.speak_cchess("您已被将死！"))
+                        self.gama_over('dobot')
                     else:
-                        self.gama_over('平局')
+                        self.gama_over()
+                else:
+                    self.gama_over('平局')
+
         except Exception as e:
             self.report_error(str(e))
+        finally:
+            # 确保在任何情况下都设置停止事件
+            self._stop_event.set()
+
     def gama_over(self, winner='player'):
         self.urController.hll()
         game_result = ""
         result_text = ""
-
+        self.game_state = 'start'
         if winner == 'player':
             print(f'恭喜您获得胜利！')
             asyncio.run(self.speak_cchess(f"恭喜您获得胜利！"))
