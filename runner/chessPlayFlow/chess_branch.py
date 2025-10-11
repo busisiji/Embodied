@@ -9,8 +9,7 @@ from parameters import WORLD_POINTS_R, WORLD_POINTS_RCV, WORLD_POINTS_B, CHESS_P
     IO_QI, RCV_H_LAY
 from src.cchessAI import cchess
 from src.cchessYolo.detect_chess_box import calculate_4x4_collection_positions
-from utils.calibrationManager import multi_camera_pixel_to_world, chess_to_world_position, get_area_center
-
+from utils.calibrationManager import chess_to_world_position, get_area_center
 
 class ChessPlayFlowBranch():
     # 分支函数
@@ -49,16 +48,16 @@ class ChessPlayFlowBranch():
                 chess_box_points = np.array([[point[0], point[1]] for point in chess_box_points])
                 print("像素四角", chess_box_points)
                 # 转换为世界坐标检查尺寸 注意镜像翻转
-                world_corner_0 = multi_camera_pixel_to_world(chess_box_points[2][0], chess_box_points[2][1],
+                world_corner_0 = self.parent.cUtils.pixel_to_world_cchess(chess_box_points[2][0], chess_box_points[2][1],
                                                              self.parent.inverse_matrix_r, "RCV_CAMERA",
                                                              use_tps=True)  # 棋盒左上角
-                world_corner_1 = multi_camera_pixel_to_world(chess_box_points[3][0], chess_box_points[3][1],
+                world_corner_1 = self.parent.cUtils.pixel_to_world_cchess(chess_box_points[3][0], chess_box_points[3][1],
                                                              self.parent.inverse_matrix_r, "RCV_CAMERA",
                                                              use_tps=True)  # 棋盒右上角
-                world_corner_2 = multi_camera_pixel_to_world(chess_box_points[0][0], chess_box_points[0][1],
+                world_corner_2 = self.parent.cUtils.pixel_to_world_cchess(chess_box_points[0][0], chess_box_points[0][1],
                                                              self.parent.inverse_matrix_r, "RCV_CAMERA",
                                                              use_tps=True)  # 棋盒右下角
-                world_corner_3 = multi_camera_pixel_to_world(chess_box_points[1][0], chess_box_points[1][1],
+                world_corner_3 = self.parent.cUtils.pixel_to_world_cchess(chess_box_points[1][0], chess_box_points[1][1],
                                                              self.parent.inverse_matrix_r, "RCV_CAMERA",
                                                              use_tps=True)  # 棋盒左下角
 
@@ -242,7 +241,7 @@ class ChessPlayFlowBranch():
         for obj_info in objects_info:
             pixel_x, pixel_y = obj_info['center']
             # 转换像素坐标到世界坐标
-            x_world, y_world = multi_camera_pixel_to_world(
+            x_world, y_world = self.parent.cUtils.pixel_to_world_cchess(
                 pixel_x, pixel_y, self.parent.inverse_matrix_r ,camera_type="RCV_CAMERA")
 
             # 计算与目标位置的距离
@@ -339,7 +338,7 @@ class ChessPlayFlowBranch():
         for object_info in objects_info:
             if object_info['class_name'] in target_class_names:
                 pixel_x, pixel_y = object_info['center']
-                x_world, y_world = multi_camera_pixel_to_world(pixel_x, pixel_y,inverse_matrix, camera_type)
+                x_world, y_world = self.parent.cUtils.pixel_to_world_cchess(pixel_x, pixel_y,inverse_matrix, camera_type)
                 piece_positions.append((x_world, y_world))
 
         # 保存识别结果（包括可视化检测结果）
@@ -483,7 +482,7 @@ class ChessPlayFlowBranch():
                 height = obj_info.get('height', None)
 
                 # 直接将像素坐标转换为世界坐标
-                x_world, y_world = multi_camera_pixel_to_world(
+                x_world, y_world = self.parent.cUtils.pixel_to_world_cchess(
                     center_x, center_y, inverse_matrix)
 
                 # 按棋子类型分类存储
@@ -541,7 +540,7 @@ class ChessPlayFlowBranch():
             place_height = POINT_DOWN[0]  # 放置高度
 
             rcv_center_x, rcv_center_y = get_area_center(CHESS_POINTS_RCV_H)
-            rcv_world_x, rcv_world_y = multi_camera_pixel_to_world(
+            rcv_world_x, rcv_world_y = self.parent.cUtils.pixel_to_world_cchess(
                     rcv_center_x, rcv_center_y, inverse_matrix)
             print(f"📥 将{side}方棋子{target_piece}从收子区放置到位置({target_row},{target_col})")
 

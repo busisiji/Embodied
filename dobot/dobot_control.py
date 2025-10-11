@@ -50,6 +50,7 @@ class URController():
         self.feed = None
         self.current_actual = None  # 当前坐标
         self.is_wait = True
+        self.is_wait_no = False # 是否不在等待
 
         self.safety_zone = (5, 5, 0.05)  # 安全区域范围
 
@@ -253,9 +254,9 @@ class URController():
                 result_container[0] = func()
                 # sync_result = self.move.Sync() # 会阻塞子线程
                 if point_list:
-                    while not self.wait_arrive(point_list):
-                        time.sleep(0.1)  # 短暂休眠，允许处理其他事件
-
+                    if not self.wait_arrive(point_list):
+                        print("❌ 机械臂无法到达指定位置")
+                        return
                 print("✅ 机械臂运动完成")
             except Exception as e:
                 exception_container[0] = e
@@ -285,7 +286,11 @@ class URController():
             self.paused_operations.append(operation)
             while self.paused:
                 self.pause_event.wait()  # 阻塞直到事件被触发
-
+        # # 设置用户坐标系
+        # self.move.User(0)
+        # # 设置工具坐标系
+        # self.move.Tool(0)
+        # self.dashboard.SetArmOrientation(1,1,1,1)
         # result = self._execute_command(func, description=description)
         result = self._execute_command_async(func, point_list, description=description)
         return result is not None
@@ -368,6 +373,8 @@ class URController():
         for code in error_codes:
             error_msg = self._get_error_message(code)
             print(f"📝 错误详情: {error_msg}")
+        if '17' in error_info:
+            self.is_wait_no = True
 
         # 通过WebSocket发送报警信息
         self._send_alarm_notification(f"机械臂报警: 错误代码 {error_info}")
@@ -428,7 +435,7 @@ class URController():
         )
 
         if response:
-            if "OK" in response:
+            if "0" == response.split(",")[0]:
                 print("✅ 报警已清除")
                 self.current_error_status = None
                 return True
@@ -671,13 +678,16 @@ class URController():
                     self.feed.close()
                 return
 
-    def wait_arrive(self, point_list, timeout=30):
+    def wait_arrive(self, point_list, timeout=10):
         """等待机械臂到达目标位置"""
         start_time = time.time()
         last_valid_position_time = time.time()
 
         while True:
-            # 检查是否超时
+            if self.is_wait_no:
+                self.is_wait_no = False
+                return False
+                # 检查是否超时
             if time.time() - start_time > timeout:
                 print(f"⚠️ 等待机械臂到达超时 ({timeout}秒)")
                 return False
@@ -742,7 +752,7 @@ class URController():
     # 设置参数
     def set_speed(self, speed_factor=0.5):
         """设置运动速度因子"""
-        if 0 < speed_factor < 1:
+        if 0 <= speed_factor <= 1:
             speed_factor = int(speed_factor * 100)
         result = self._execute_with_dashboard(
             lambda: self.dashboard.SpeedFactor(speed_factor),
@@ -867,6 +877,42 @@ class URController():
             print("✅ 机械臂运动完成")
         else:
             print("❌ 等待运动完成时发生错误")
+
+    def move_jog(self, axisID):
+        """
+        点动/停止点动
+
+        J1+ 表示关节1正方向运动， J1- 表示关节1负方向运动
+        J2+ 表示关节2正方向运动， J2- 表示关节2负方向运动
+        J3+ 表示关节3正方向运动，J3- 表示关节3负方向运动
+        J4+ 表示关节4正方向运动，J4- 表示关节4负方向运动
+        J5+ 表示关节5正方向运动，J5- 表示关节5负方向运动
+        J6+ 表示关节6正方向运动，J6- 表示关节6负方向运动
+        X+ 表示X轴正方向运动，X- 表示X轴负方向运动
+        Y+ 表示Y轴正方向运动，Y- 表示Y轴负方向运动
+        Z+ 表示Z轴正方向运动，Z- 表示Z轴负方向运动
+        Rx+ 表示Rx轴正方向运动，Rx- 表示Rx轴负方向运动
+        Ry+ 表示Ry轴正方向运动，Ry- 表示Ry轴负方向运动
+        Rz+ 表示Rz轴正方向运动，Rz- 表示Rz轴负方向运动
+        空字符串表示停止点动
+        """
+        try:
+            if axisID == "":
+                # 停止点动
+                result = self._execute_with_move(
+                    lambda: self.move.MoveJog(""),
+                    description="停止点动"
+                )
+            else:
+                # 开始点动
+                result = self._execute_with_move(
+                    lambda: self.move.MoveJog(axisID),
+                    description=f"点动 {axisID}"
+                )
+            return result
+        except Exception as e:
+            print(f"❌ 点动操作失败: {str(e)}")
+            return False
 
     def run_point_l(self, point_list: list):
         """运行到指定点(直线运动)"""
@@ -1366,17 +1412,17 @@ if __name__ == "__main__":
         # print(x,y)
         # urController.run_point_j([-173,-198,195,-179,0.2,-179])
         # time.sleep(5)
-        urController.run_point_j(RED_CAMERA)
+        # urController.run_point_j(RED_CAMERA)
         # urController.pause()
         # print('暂停')
-        # urController.run_point_j(BLACK_CAMERA)
+        urController.run_point_j(BLACK_CAMERA)
         # urController.hll(5)
         # urController.resume()
         # print('继续')
         # urController.wait_mvoe()
         # urController.run_point_j(BLACK_CAMERA)
 
-        # urController.run_point_j([-28,-379,195,-179,0.2,-179])
+        # urController.run_point_j([154,-377,205,-179,0.2,-179])
         # time.sleep(10)
         # urController.run_point_j(RED_CAMERA)
         # urController.run_point_j([175,-538,195,-179,0.2,-179])
@@ -1389,7 +1435,7 @@ if __name__ == "__main__":
         # urController.set_do(IO_QI, 0)  # 吸合123456
 
         # urController.run_point_j(RCV_CAMERA)
-        # time.sleep(3)
+        time.sleep(3)
         # urController.wait_arrive(BLACK_CAMERA)
         # urController.move_to(-410.96, -299.49,260)-
         # time.sleep(10)
@@ -1401,7 +1447,7 @@ if __name__ == "__main__":
         # time.sleep(5)
         # print(urController.is_point_reachable(-400, -440,319)
 
-        time.sleep(1000)
+        # time.sleep(1000)
         # alarm_handling_test(urController)
         # get_dis(urController,1,4)
         # get_dos(urController,1,4)

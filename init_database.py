@@ -3,7 +3,8 @@
 数据库初始化脚本
 用于初始化所有表结构并创建默认配置表
 """
-
+from api.models.chess_config_model import ChessGameConfig
+from api.models.model_managers import UserManager
 from api.models.user_model import User
 from api.models.config_model import ConfigTable, ConfigField, ConfigData
 from api.models.chess_file_models import DataFile, ModelFile
@@ -20,15 +21,16 @@ def init_all_tables():
     print("正在初始化数据库表...")
 
     # 创建所有表结构
-    with db:
-        db.create_tables([
-            User,
-            ConfigTable,
-            ConfigField,
-            ConfigData,
-            DataFile,   # 添加数据文件表
-            ModelFile,  # 添加模型文件表
-        ], safe=True)
+    # with db:
+    #     db.create_tables([
+    #         User,
+    #         ChessGameConfig,
+    #         # ConfigField,
+    #         # ConfigData,
+    #         # DataFile,   # 添加数据文件表
+    #         # ModelFile,  # 添加模型文件表
+    #     ], safe=True)
+    UserManager()
 
     print("数据库表初始化完成!")
 
@@ -615,43 +617,7 @@ def create_chess_file_tables():
         raise
 
 
-def create_admin_user():
-    """
-    创建默认管理员账户
-    """
-    print("正在创建默认管理员账户...")
 
-    try:
-        # 检查是否已存在admin用户
-        existing_user = User.get_or_none(User.name == "admin")
-        if existing_user:
-            print("  - 管理员账户已存在")
-            return
-
-        # 生成用户ID (user_ + 时间戳)
-        from datetime import datetime
-        user_id = f"user_{int(datetime.now().timestamp() * 1000)}"
-
-        # 导入密码哈希函数
-        from api.services.auth_service import hash_password
-
-        # 哈希密码
-        hashed_password, salt = hash_password("admin")
-
-        # 创建管理员用户
-        user = User.create(
-            user_id=user_id,
-            name="admin",
-            permission="admin",
-            password=hashed_password + ":" + salt
-        )
-
-        print("  - 成功创建管理员账户 (用户名: admin, 密码: admin)")
-        return user_id
-
-    except Exception as e:
-        print(f"创建管理员账户时出错: {str(e)}")
-        raise
 def init_database():
     """
     初始化完整数据库
@@ -664,17 +630,15 @@ def init_database():
         # 1. 初始化所有表
         init_all_tables()
 
-        # 2. 创建棋谱文件表
-        create_chess_file_tables()
+        # # 2. 创建棋谱文件表
+        # create_chess_file_tables()
 
-        # 3. 创建管理员账户
-        user_id = create_admin_user()
 
-        # 4. 创建默认配置表结构
-        create_default_config_tables()
-
-        # 5. 设置默认配置值
-        set_default_config_values(user_id)
+        # # 4. 创建默认配置表结构
+        # create_default_config_tables()
+        #
+        # # 5. 设置默认配置值
+        # set_default_config_values(user_id)
 
         # 6. 同步本地文件和数据库
         # ModelService.sync_all_users_files_to_db()

@@ -6,11 +6,10 @@ import numpy as np
 
 from parameters import WORLD_POINTS_R, WORLD_POINTS_RCV, WORLD_POINTS_B, CHESS_POINTS_R, CHESS_POINTS_RCV_H, \
     CHESS_POINTS_B, CHESS_POINTS_RCV_L, RCV_CAMERA, POINT_DOWN, POINT_RCV_DOWN, RED_CAMERA, BLACK_CAMERA, PIECE_SIZE, \
-    IO_QI, RCV_H_LAY
+    IO_QI, RCV_H_LAY, R_RO_B
+from runner.runner_hand_eye import pixel_to_world_coordinates
 from src.cchessAI import cchess
 from src.cchessAI.core.game import uci_to_coordinates, get_best_move_with_computer_play, execute_computer_move
-from src.cchessYolo.detect_chess_box import calculate_4x4_collection_positions
-from utils.calibrationManager import multi_camera_pixel_to_world, chess_to_world_position, get_area_center
 from utils.tools import move_id2move_action
 
 
@@ -193,6 +192,20 @@ class ChessPlayFlowUtils():
             # asyncio.run(self.parent.speak_cchess("所有棋子位置正确"))
             return True
 
+    # 坐标转换
+    def pixel_to_world_cchess(self,p_x,p_y, inverse_matrix,camera_type='RED_CAMERA'):
+        if camera_type == 'RED_CAMERA':
+            w_x,w_y = pixel_to_world_coordinates(p_x,p_y)
+        elif camera_type == 'BLACK_CAMERA':
+            p_x,p_y = 1280-p_x,720-p_y
+            w_x,w_y = pixel_to_world_coordinates(p_x,p_y,inverse_matrix=True)
+            w_x = w_x + BLACK_CAMERA[0] - RED_CAMERA[0] + R_RO_B[0]
+            w_y = w_y + BLACK_CAMERA[1] - RED_CAMERA[1] + R_RO_B[1]
+        elif camera_type == 'RCV_CAMERA':
+            w_x,w_y = pixel_to_world_coordinates(p_x,p_y,inverse_matrix=True)
+            w_x = w_x + RCV_CAMERA[0] - RED_CAMERA[0]
+            w_y = w_y + RCV_CAMERA[1] - RED_CAMERA[1]
+        return w_x,w_y
     # 算法
     def is_in_check(self, board, side):
         """

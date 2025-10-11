@@ -1,9 +1,10 @@
 # api/routes/chess_game_routes.py
 
-from fastapi import APIRouter, Depends, status  # 添加status导入
+from fastapi import APIRouter, Depends, status, HTTPException  # 添加status导入
 from pydantic import BaseModel
 from typing import Optional
 
+from api.models.chess_config_model import ChessGameConfig
 from api.services.chess_game_service import chess_game_service
 from api.models.user_model import User
 from api.services.auth_service import get_current_user_from_request
@@ -17,32 +18,7 @@ class InitializeRequest(BaseModel):
     """
     初始化游戏请求参数
     """
-    # 机器人执子方
-    robot_side: str = "black"
-
-    # 模型路径参数
-    play_model_file: Optional[str] = "/home/jetson/Desktop/Embodied/src/cchessAI/models/admin/trt/current_policy_batch7483_202507170806.trt"
-    yolo_model_path: Optional[str] = "/home/jetson/Desktop/Embodied/src/cchessYolo/runs/detect/chess_piece_detection_separate7/weights/best.pt"
-
-    # 对弈参数
-    use_api: bool = True
-    use_gpu: bool = True
-    nplayout: int = 400
-    cpuct: float = 5.0
-
-    show_board: bool = True
-
-    # 机械臂相关参数
-    robot_ip: str = "192.168.5.1"
-
-    # 识别参数
-    conf: float = 0.45
-    iou: float = 0.25
-
-    # 语音参数
-    voice_rate: int = 0
-    voice_volume: int = 0
-    voice_pitch: int = 0
+    user_name: str  # 用户名，用于获取对应的配置
 
 class SpeakRequest(BaseModel):
     """
@@ -62,15 +38,48 @@ class WindowPortsResponse(BaseModel):
     active_windows: dict  # 活跃窗口 {window_id: port}
     success: bool = True
 
+
 @router.post("/initialize", status_code=status.HTTP_200_OK)
 @handle_route_exceptions("chess_game")
 @format_response()
-def initialize_game(request: InitializeRequest,
-                         current_user: User = Depends(get_current_user_from_request)):
+def initialize_game(current_user: User = Depends(get_current_user_from_request)):
     """
-    初始化象棋对弈游戏
+    初始化象棋对弈游戏，根据用户名获取配置
+
+    Args:
+        request: 包含用户名的请求对象
+        current_user: 当前登录用户
     """
-    result = chess_game_service.initialize_game(**request.dict())
+    # 验证用户身份
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户未认证"
+        )
+
+    # 获取用户的配置
+    config = ChessGameConfig.get_default_config(current_user.user_id)
+
+    # 构造传递给service的参数字典
+    init_params = {
+        'robot_side': config.robot_side,
+        'play_model_file': config.play_model_file,
+        'yolo_model_path': config.yolo_model_path,
+        'nplayout': config.nplayout,
+        'cpuct': config.cpuct,
+        'conf': config.conf,
+        'iou': config.iou,
+        'use_api': True,
+        'use_gpu': True,
+        'show_board': True,
+        'save_recognition_results': None,
+        'robot_ip': None,
+        'voice_rate': None,
+        'voice_volume': None,
+        'voice_pitch': None
+    }
+
+    result = chess_game_service.initialize_game(**init_params)
     return format_response_data(result)
 
 @router.post("/start", status_code=status.HTTP_200_OK)

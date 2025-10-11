@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from src.tts_utils.edgeTTS import EdgeTTSWrapper
 from src.tts_utils.ekhoTTS import EkhoTTS
-from src.tts_utils.piperTTS import synthesize_and_play
+
 
 voice_loop,voice_thread = None,None
 class TTSManager:
@@ -364,6 +364,7 @@ class TTSManager:
         在线程中运行的阻塞式Piper TTS调用
         """
         try:
+            from src.tts_utils.piperTTS import synthesize_and_play
             sys.path.append(os.path.dirname(os.path.abspath(__file__)))
             print("🔄 使用 Piper TTS 引擎")
             synthesize_and_play(text)

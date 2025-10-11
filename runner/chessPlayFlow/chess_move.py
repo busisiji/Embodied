@@ -11,7 +11,7 @@ from parameters import WORLD_POINTS_R, WORLD_POINTS_RCV, WORLD_POINTS_B, CHESS_P
     CHESS_POINTS_B, CHESS_POINTS_RCV_L, RCV_CAMERA, POINT_DOWN, POINT_RCV_DOWN, RED_CAMERA, BLACK_CAMERA, PIECE_SIZE, \
     IO_QI, RCV_H_LAY, SAC_CAMERA, POINT_SAC_DOWN
 from src.cchessAI import cchess
-from utils.calibrationManager import multi_camera_pixel_to_world, chess_to_world_position, get_area_center
+from utils.calibrationManager import chess_to_world_position, get_area_center
 
 
 class ChessPlayFlowMove():
@@ -142,10 +142,10 @@ class ChessPlayFlowMove():
 
             # 根据半区类型转换为世界坐标
             if from_row <= 4:  # 判断是红方还是黑方半区
-                from_x_world, from_y_world = multi_camera_pixel_to_world(pixel_x, pixel_y, self.parent.inverse_matrix_r,
+                from_x_world, from_y_world = self.parent.cUtils.pixel_to_world_cchess(pixel_x, pixel_y, self.parent.inverse_matrix_r,
                                                                          "RED_CAMERA")
             else:
-                from_x_world, from_y_world = multi_camera_pixel_to_world(pixel_x, pixel_y, self.parent.inverse_matrix_b,
+                from_x_world, from_y_world = self.parent.cUtils.pixel_to_world_cchess(pixel_x, pixel_y, self.parent.inverse_matrix_b,
                                                                          "BLACK_CAMERA")
             print('像素坐标：', pixel_x, pixel_y)
         else:
@@ -240,7 +240,7 @@ class ChessPlayFlowMove():
         # 根据半区类型转换为世界坐标
         camera_type = "RED_CAMERA" if (9-row) <= 4 else "BLACK_CAMERA"
         inverse_matrix = self.parent.inverse_matrix_r if  (9-row) <= 4 else self.parent.inverse_matrix_b
-        from_x_world, from_y_world = multi_camera_pixel_to_world(pixel_x, pixel_y,inverse_matrix, camera_type)
+        from_x_world, from_y_world = self.parent.cUtils.pixel_to_world_cchess(pixel_x, pixel_y,inverse_matrix, camera_type)
         print('像素坐标：', pixel_x, pixel_y)
 
         # 计算弃子区域偏移位置
@@ -346,10 +346,10 @@ class ChessPlayFlowMove():
         """
         # 转换为世界坐标
         if row <= 4:  # 红方区域(0-4行)
-            x_world, y_world = multi_camera_pixel_to_world(pixel_x, pixel_y, self.parent.inverse_matrix_r, "RED_CAMERA")
+            x_world, y_world = self.parent.cUtils.pixel_to_world_cchess(pixel_x, pixel_y, self.parent.inverse_matrix_r, "RED_CAMERA")
             half_board = "red"
         else:  # 黑方区域(5-9行)
-            x_world, y_world = multi_camera_pixel_to_world(pixel_x, pixel_y, self.parent.inverse_matrix_b, "BLACK_CAMERA")
+            x_world, y_world = self.parent.cUtils.pixel_to_world_cchess(pixel_x, pixel_y, self.parent.inverse_matrix_b, "BLACK_CAMERA")
             half_board = "black"
 
         # 计算标准位置的世界坐标
@@ -413,10 +413,10 @@ class ChessPlayFlowMove():
 
                 # 转换为世界坐标
                 if row <= 4:  # 红方区域(0-4行)
-                    x_world, y_world = multi_camera_pixel_to_world(pixel_x, pixel_y, self.parent.inverse_matrix_r,
+                    x_world, y_world = self.parent.cUtils.pixel_to_world_cchess(pixel_x, pixel_y, self.parent.inverse_matrix_r,
                                                                    "RED_CAMERA")
                 else:  # 黑方区域(5-9行)
-                    x_world, y_world = multi_camera_pixel_to_world(pixel_x, pixel_y, self.parent.inverse_matrix_b,
+                    x_world, y_world = self.parent.cUtils.pixel_to_world_cchess(pixel_x, pixel_y, self.parent.inverse_matrix_b,
                                                                    "BLACK_CAMERA")
 
                 piece_world_positions[(row, col)] = (x_world, y_world)

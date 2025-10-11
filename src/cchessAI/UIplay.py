@@ -14,7 +14,7 @@ if project_root not in sys.path:
 from core.game import Game
 import cchess
 from core.mcts import MCTS_AI
-from utils.tools import move_id2move_action, move_action2move_id
+from src.cchessAI.tools import move_id2move_action, move_action2move_id
 from core.net import PolicyValueNet
 
 

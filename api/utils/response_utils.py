@@ -55,7 +55,7 @@ def format_response_data(data: Any, remove_sensitive_func=None, token: str = Non
     }
 
     # 如果只有一个项目，直接返回该项目
-    if len(items) <= 1 :
+    if len(items) <= 1 and formatted_data:
         # 合并单个项目的数据到结果中
         single_item = formatted_data[0]
         if isinstance(single_item, dict):

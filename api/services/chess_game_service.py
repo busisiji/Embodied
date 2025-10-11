@@ -66,7 +66,7 @@ class ChessGameService:
 
     def _create_args_namespace(self, kwargs: dict) -> Namespace:
         """
-        创建参数命名空间对象
+        创建参数命名空间对象，只更新非None的参数
         """
 
         parser = create_parser()
@@ -74,12 +74,13 @@ class ChessGameService:
         # 解析空参数以获取默认值
         args = parser.parse_args([])
 
-        # 将kwargs中的参数更新到args中
+        # 只更新非None的参数
         for key, value in kwargs.items():
-            if hasattr(args, key):
+            if value is not None and hasattr(args, key):
                 setattr(args, key, value)
 
         return args
+
 
     @handle_service_exceptions("chess_game")
     def initialize_game(self, **kwargs) -> Dict[str, Any]:

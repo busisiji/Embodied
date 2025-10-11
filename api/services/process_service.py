@@ -119,21 +119,21 @@ class ProcessService:
 
     @staticmethod
     @handle_service_exceptions("training")
-    def start_training(user_id: str = "admin", init_model: Optional[str] = None,
+    def start_training(user_id: str = "admin", init_model: Optional[str] = None,save_path: str = None,
                        data_path: Optional[str] = None, epochs: int = 5,
                        batch_size: int = 512) -> Dict[str, Any]:
         """
         启动模型训练
         """
         # 构建命令行参数
-        cmd = ["python", "-m", "src.cchessAI.train.train"]  # 添加 user_id 参数
+        cmd = ["python", "-m", "src.cchessAI.core.train.train"]  # 添加 user_id 参数
 
         if init_model:
             cmd.extend(["--init-model", init_model])
 
         if data_path:
             cmd.extend(["--data-path", data_path])
-
+        cmd.extend(["--save-path", save_path])
         cmd.extend(["--epochs", str(epochs)])
         cmd.extend(["--batch-size", str(batch_size)])
 

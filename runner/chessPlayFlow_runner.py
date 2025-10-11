@@ -18,6 +18,7 @@ from runner.chessPlayFlow.chess_branch import ChessPlayFlowBranch
 from runner.chessPlayFlow.chess_camera import ChessPlayFlowCamera
 from runner.chessPlayFlow.chess_move import ChessPlayFlowMove
 from runner.chessPlayFlow.chess_utils import ChessPlayFlowUtils
+from src.cchessAI.parameters import MODELS
 from src.speech.speech_service import initialize_speech_recognizer, get_speech_recognizer
 from dobot.dobot_control import connect_and_check_speed
 from parameters import RED_CAMERA, BLACK_CAMERA, RCV_CAMERA, WORLD_POINTS_R, WORLD_POINTS_B, SRC_RCV_POINTS, \
@@ -26,8 +27,8 @@ from src.cchessAG.chinachess import MainGame
 from src.cchessAI import cchess
 
 # 添加项目路径到PYTHONPATH
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
+dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -741,6 +742,8 @@ class ChessPlayFlow(ChessPlayFlowInit):
                     import torch
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
+                        # 确保CUDA上下文激活
+                        torch.cuda.init()
 
                 policy_value_net = PolicyValueNet(
                     model_file=self.args.play_model_file,
@@ -1446,10 +1449,10 @@ def create_parser():
 
     # 模型路径参数
     parser.add_argument('--yolo_model_path', type=str,
-                        default='../src/cchessYolo/runs/detect/chess_piece_detection_separate/weights/best.onnx',
+                        default=os.path.join(dir, '../src/cchessYolo/runs/detect/chess_piece_detection_separate3/weights/best.onnx'),
                         help='YOLO棋子检测模型路径')
     parser.add_argument('--play_model_file', type=str,
-                        default='../src/cchessAI/models/admin/trt/current_policy_batch7483_202507170806.trt',
+                        default=os.path.join(MODELS, 'onnx/current_policy_batch7661_202507241306.onnx'),
                         help='对弈模型文件路径')
     # 相机位置参数
     parser.add_argument('--red_camera_position', type=float, nargs=6,

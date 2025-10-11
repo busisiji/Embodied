@@ -6,12 +6,12 @@ from pathlib import Path
 import json
 
 def create_dataset_structure():
-    """创建数据集目录结构（不含测试集）"""
+    """创建数据集目录结构（按期望格式）"""
     dirs = [
-        'dataset/train/images',
-        'dataset/train/labels',
-        'dataset/val/images',
-        'dataset/val/labels'
+        'dataset/images/train',
+        'dataset/images/val',
+        'dataset/labels/train',
+        'dataset/labels/val'
     ]
 
     for dir_path in dirs:
@@ -31,22 +31,39 @@ def get_image_from_json(json_path):
             return str(image_path)
     return None
 
-def convert_json_to_yolo(json_path, txt_path, img_width=640, img_height=480):
+def convert_json_to_yolo(json_path, txt_path, img_width=1280, img_height=720):
     """将JSON标注转换为YOLO格式"""
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
+    # 如果未指定图像尺寸，则从JSON数据中获取
+    if img_width == 1280 and img_height == 720:  # 默认值
+        img_width = data.get('imageWidth', img_width)
+        img_height = data.get('imageHeight', img_height)
+
     yolo_lines = []
+    # 中国象棋棋子类别映射
     class_mapping = {
-        "red_triangle": 0,
-        "blue_circle": 1,
-        "yellow_pentagon": 2,
-        "green_rectangle": 3
+        "A": 0,  # 红仕
+        "B": 1,  # 红相
+        "C": 2,  # 红炮
+        "K": 3,  # 红帅
+        "N": 4,  # 红马
+        "P": 5,  # 红兵
+        "R": 6,  # 红车
+        "a": 7,  # 黑仕
+        "b": 8,  # 黑相
+        "c": 9,  # 黑炮
+        "k": 10, # 黑将
+        "n": 11, # 黑马
+        "p": 12, # 黑卒
+        "r": 13  # 黑车
     }
 
     for shape in data.get('shapes', []):
         label = shape.get('label')
         if label not in class_mapping:
+            print(f"⚠️  未知标签 '{label}'，跳过")
             continue
 
         class_id = class_mapping[label]
@@ -62,15 +79,8 @@ def convert_json_to_yolo(json_path, txt_path, img_width=640, img_height=480):
             y_coords = [point[1] for point in points]
             x_min, x_max = min(x_coords), max(x_coords)
             y_min, y_max = min(y_coords), max(y_coords)
-        elif shape.get('shape_type') == 'circle':
-            # 圆形格式: [[center_x,center_y], [edge_x,edge_y]]
-            center_x, center_y = points[0]
-            edge_x, edge_y = points[1]
-            radius = ((center_x - edge_x) ** 2 + (center_y - edge_y) ** 2) ** 0.5
-            x_min, x_max = center_x - radius, center_x + radius
-            y_min, y_max = center_y - radius, center_y + radius
         else:
-            # 多边形格式: [[x1,y1], [x2,y2], ...]
+            # 对于其他形状（如多边形），使用所有点的边界框
             x_coords = [point[0] for point in points]
             y_coords = [point[1] for point in points]
             x_min, x_max = min(x_coords), max(x_coords)
@@ -132,12 +142,12 @@ def process_file(json_file, dataset_type):
         print(f"⚠️  未找到 {json_file} 对应的图像文件，跳过")
         return
 
-    # 复制图像文件
-    dest_image = f'dataset/{dataset_type}/images/{Path(image_file).name}'
+    # 复制图像文件到正确位置
+    dest_image = f'dataset/images/{dataset_type}/{Path(image_file).name}'
     shutil.copy2(image_file, dest_image)
 
-    # 转换并保存标注文件
-    dest_label = f'dataset/{dataset_type}/labels/{json_file.stem}.txt'
+    # 转换并保存标注文件到正确位置
+    dest_label = f'dataset/labels/{dataset_type}/{json_file.stem}.txt'
     convert_json_to_yolo(str(json_file), dest_label)
 
     print(f"📄 处理文件: {json_file.name} -> {dataset_type}")

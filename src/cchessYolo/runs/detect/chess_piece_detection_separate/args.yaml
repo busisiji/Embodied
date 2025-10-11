@@ -1,7 +1,7 @@
 task: detect
 mode: train
-model: yolov8s.pt
-data: yaml/data.yaml
+model: yolov12m.pt
+data: yolov12m.yaml
 epochs: 300
 time: null
 patience: 100
@@ -10,10 +10,10 @@ imgsz: 640
 save: true
 save_period: -1
 cache: false
-device: '0'
+device: null
 workers: 8
 project: null
-name: chess_piece_detection_separate
+name: chess_piece_detection_separate2
 exist_ok: false
 pretrained: true
 optimizer: auto
@@ -102,4 +102,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: botsort.yaml
-save_dir: runs\detect\chess_piece_detection_separate
+save_dir: runs\detect\chess_piece_detection_separate2

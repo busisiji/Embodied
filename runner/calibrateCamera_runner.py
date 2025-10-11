@@ -16,8 +16,8 @@ from src.cchessYolo.chess_detection_trainer import ChessPieceDetectorSeparate
 from src.cchessYolo.detect_chess_box import select_corner_circles, order_points, calculate_box_corners
 dir = os.path.dirname(os.path.abspath(__file__))
 # ================== 配置参数 ==================
-SQUARE_SIZE_MM = 30.0          # 棋盘格大小（单位：毫米）
-CHESSBOARD_SHAPE = (5, 7)      # 内部角点数量（对应 4x4 棋盘格）
+SQUARE_SIZE_MM = 12.5         # 棋盘格大小（单位：毫米）
+CHESSBOARD_SHAPE = (7, 7)      # 内部角点数量（对应 4x4 棋盘格）
 MAX_IMAGES = 100                # 最大采集图像数量
 AUTO_CAPTURE_INTERVAL = 100   # 自动拍照间隔（毫秒）默认 10s
 SAVE_DIR = os.path.join(dir, "calibration/images")
@@ -51,7 +51,7 @@ class CalibrationApp:
         self.M = None
         self.chess_box_points = None
 
-        self.detector = ChessPieceDetectorSeparate(os.path.join(dir,'../src/cchessYolo/runs/detect/chess_piece_detection_separate5/weights/best.onnx')
+        self.detector = ChessPieceDetectorSeparate(os.path.join(dir,'../src/cchessYolo/runs/detect/chess_piece_detection_separate3/weights/best.pt')
         )
 
     def init(self):
@@ -102,8 +102,8 @@ class CalibrationApp:
         self.auto_button.pack(side=tk.LEFT, padx=5)
 
 
-        self.calibrate_button = tk.Button(self.btn_frame, text="🎯 畸变矫正", command=self.apply_perspective_correction)
-        self.calibrate_button.pack(side=tk.LEFT, padx=5)
+        # self.calibrate_button = tk.Button(self.btn_frame, text="🎯 畸变矫正", command=self.apply_perspective_correction)
+        # self.calibrate_button.pack(side=tk.LEFT, padx=5)
 
         # 新增按钮，控制是否实时应用矫正
         self.correct_toggle_button = tk.Button(self.btn_frame, text="🔄 实时矫正", command=self.toggle_correction)
@@ -338,7 +338,7 @@ class CalibrationApp:
         if ret:
             if not os.path.exists(OUTPUT_DIR):
                 os.makedirs(OUTPUT_DIR)
-            np.savez(os.path.join(OUTPUT_DIR, "calibration_data.npz"), mtx=mtx, dist=dist)
+            np.savez(os.path.join(OUTPUT_DIR, "camera_params.npz"), mtx=mtx, dist=dist)
             self.status_label.config(text="✅ 从图像计算并保存标定矩阵成功", fg="green")
         else:
             self.status_label.config(text="⚠️ 相机标定失败", fg="red")
@@ -348,7 +348,7 @@ class CalibrationApp:
         """
         从文件加载相机矩阵、畸变系数和透视变换矩阵
         """
-        calibration_file = os.path.join(OUTPUT_DIR, "calibration_data.npz")
+        calibration_file = os.path.join(OUTPUT_DIR, "camera_params.npz")
 
         if not os.path.exists(calibration_file):
             self.status_label.config(text="⚠️ 未找到标定文件，请先进行标定", fg="red")
