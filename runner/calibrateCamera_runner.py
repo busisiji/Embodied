@@ -51,7 +51,7 @@ class CalibrationApp:
         self.M = None
         self.chess_box_points = None
 
-        self.detector = ChessPieceDetectorSeparate(os.path.join(dir,'../src/cchessYolo/runs/detect/chess_piece_detection_separate3/weights/best.pt')
+        self.detector = ChessPieceDetectorSeparate(os.path.join(dir,'../src/cchessYolo/fruitYolo/runs/obb/fruit_obb_detection4/weights/best.pt')
         )
 
     def init(self):
@@ -72,7 +72,7 @@ class CalibrationApp:
         self.frame = tk.Frame(self.root)
         self.frame.pack(padx=10, pady=10)
 
-        self.label = tk.Label(self.frame, text="📸 实时预览")
+        self.label = tk.Label(self.frame, text=" 实时预览")
         self.label.pack()
 
         self.canvas = tk.Canvas(self.frame, width=WIDTH if WIDTH <= 1280 else 1280, height=HEIGHT if HEIGHT <= 720 else 720)
@@ -86,40 +86,40 @@ class CalibrationApp:
         self.coord_frame = tk.Frame(self.frame)
         self.coord_frame.pack(pady=5)
 
-        self.coord_label = tk.Label(self.coord_frame, text="🖱️ 鼠标坐标: (0, 0)", fg="black")
+        self.coord_label = tk.Label(self.coord_frame, text="️ 鼠标坐标: (0, 0)", fg="black")
         self.coord_label.pack(side=tk.RIGHT, padx=5)
 
-        self.world_coord_label = tk.Label(self.coord_frame, text="🌍 世界坐标: 未标定", fg="red")
+        self.world_coord_label = tk.Label(self.coord_frame, text=" 世界坐标: 未标定", fg="red")
         self.world_coord_label.pack(side=tk.RIGHT, padx=5)
 
         self.btn_frame = tk.Frame(self.frame)
         self.btn_frame.pack(pady=10)
 
-        self.manual_button = tk.Button(self.btn_frame, text="📷 拍照", command=self.toggle_manual_mode)
+        self.manual_button = tk.Button(self.btn_frame, text=" 拍照", command=self.toggle_manual_mode)
         self.manual_button.pack(side=tk.LEFT, padx=5)
 
         self.auto_button = tk.Button(self.btn_frame, text="⏱️ 自动拍照", command=self.toggle_auto_mode)
         self.auto_button.pack(side=tk.LEFT, padx=5)
 
 
-        # self.calibrate_button = tk.Button(self.btn_frame, text="🎯 畸变矫正", command=self.apply_perspective_correction)
+        # self.calibrate_button = tk.Button(self.btn_frame, text=" 畸变矫正", command=self.apply_perspective_correction)
         # self.calibrate_button.pack(side=tk.LEFT, padx=5)
 
         # 新增按钮，控制是否实时应用矫正
-        self.correct_toggle_button = tk.Button(self.btn_frame, text="🔄 实时矫正", command=self.toggle_correction)
+        self.correct_toggle_button = tk.Button(self.btn_frame, text=" 实时矫正", command=self.toggle_correction)
         self.correct_toggle_button.pack(side=tk.LEFT, padx=5)
 
-        self.detect_chess_box_button = tk.Button(self.btn_frame, text="📦 识别收棋盒", command=self.detect_chess_box)
+        self.detect_chess_box_button = tk.Button(self.btn_frame, text=" 识别收棋盒", command=self.detect_chess_box)
         self.detect_chess_box_button.pack(side=tk.LEFT, padx=5)
 
         # 新增识别棋子按钮
-        self.detect_chess_button = tk.Button(self.btn_frame, text="🔍 识别棋子", command=self.detect_chess_pieces)
+        self.detect_chess_button = tk.Button(self.btn_frame, text=" 识别棋子", command=self.detect_chess_pieces)
         self.detect_chess_button.pack(side=tk.LEFT, padx=5)
 
         self.squares_label = tk.Label(self.frame, text="未识别到棋格...", fg="red")
         self.squares_label.pack()
 
-        self.hand_eye_calibration_button = tk.Button(self.btn_frame, text="🔧 手眼标定", command=self.hand_eye_calibration)
+        self.hand_eye_calibration_button = tk.Button(self.btn_frame, text=" 手眼标定", command=self.hand_eye_calibration)
         self.hand_eye_calibration_button.pack(side=tk.LEFT, padx=5)
 
         self.toggle_label = tk.Label(self.frame, text="实时矫正 已禁用", fg="blue")
@@ -128,7 +128,7 @@ class CalibrationApp:
         self.status_label = tk.Label(self.frame, text="状态：等待开始...", fg="blue")
         self.status_label.pack()
 
-        self.quit_button = tk.Button(self.btn_frame, text="🛑 退出", command=self.stop_app)
+        self.quit_button = tk.Button(self.btn_frame, text=" 退出", command=self.stop_app)
         self.quit_button.pack(side=tk.LEFT, padx=5)
 
     def init_camera(self):
@@ -376,7 +376,7 @@ class CalibrationApp:
 
         self.apply_correction = not self.apply_correction
         status = "已启用" if self.apply_correction else "已禁用"
-        self.toggle_label.config(text=f"🔄 实时矫正 {status}", fg="green" if self.apply_correction else "red")
+        self.toggle_label.config(text=f" 实时矫正 {status}", fg="green" if self.apply_correction else "red")
 
 
     def on_mouse_move(self, event):
@@ -386,9 +386,9 @@ class CalibrationApp:
 
         if self.show_mouse_coords:
             # 更新鼠标相机坐标
-            self.coord_label.config(text=f"🖱️ 鼠标坐标: ({self.mouse_x}, {self.mouse_y})")
+            self.coord_label.config(text=f"️ 鼠标坐标: ({self.mouse_x}, {self.mouse_y})")
             wx,wy = pixel_to_world(self.mouse_x, self.mouse_y)
-            self.world_coord_label.config(text=f"🌐 世界坐标: ({wx}, {wy})")
+            self.world_coord_label.config(text=f" 世界坐标: ({wx}, {wy})")
 
     def stop_app(self):
         """停止程序"""

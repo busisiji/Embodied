@@ -11,6 +11,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import sys
 
 from dobot.dobot_control import URController
+from parameters import FRUIT_CAMERA,RED_CAMERA,IO_QI
+
 
 # 添加机械臂控制模块导入
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -33,8 +35,8 @@ class HandEyeCalibration:
         self.T_camera2base = np.zeros((3, 1), dtype=np.float64)  # 平移向量
 
         # 棋盘格参数
-        self.target_x_number = 7  # 棋盘格内角点x方向数量
-        self.target_y_number = 7  # 棋盘格内角点y方向数量
+        self.target_x_number = 5  # 棋盘格内角点x方向数量
+        self.target_y_number = 8  # 棋盘格内角点y方向数量
         self.board_size = (self.target_x_number, self.target_y_number)
 
         # 初始化时尝试加载相机参数
@@ -82,7 +84,7 @@ class HandEyeCalibration:
 
         if os.path.exists(filename):
             try:
-                data = np.load(filename)
+                data = np.load(filename, allow_pickle=True)
                 self.K = data['mtx']
                 self.distortion = data['dist']
 
@@ -322,11 +324,29 @@ class HandEyeCalibration:
         print(f"标定点图像已保存到 {output_path}")
         return img
 
+    def pixel_to_world_nine_points(self, pixel_x, pixel_y):
+        """
+        使用九点标定数据将像素坐标转换为世界坐标
+
+        Args:
+            pixel_x: 像素x坐标
+            pixel_y: 像素y坐标
+
+        Returns:
+            tuple: (world_x, world_y) 世界坐标
+        """
+        # 这个方法需要从外部获取九点标定数据
+        # 由于这个类没有直接访问GUI中的九点标定数据，我们需要通过其他方式传递
+        raise NotImplementedError("需要从GUI传递九点标定数据")
 class HandEyeCalibrationGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("手眼标定系统")
         self.root.geometry("1200x800")
+
+        # 配置按钮样式（可选）
+        style = ttk.Style()
+        style.configure("Red.TButton", foreground="red")
 
         self.calibrator = HandEyeCalibration()
         self.current_image = None
@@ -334,6 +354,7 @@ class HandEyeCalibrationGUI:
         self.image_files = []              # 新增
         self.current_image_index = -1       # 新增
         self.robot_speed = tk.DoubleVar(value=50.0)  # 默认速度50%
+        self.suction_state = False  # 吸取状态：False=释放状态，True=吸取状态
 
         # 机械臂控制器
         self.robot_controller = None
@@ -462,10 +483,13 @@ class HandEyeCalibrationGUI:
         # 移动控制
         move_frame = ttk.LabelFrame(control_frame, text="移动控制")
         move_frame.pack(fill=tk.X, pady=5)
+        suction_frame = ttk.LabelFrame(control_frame, text="吸放控制")
+        suction_frame.pack(fill=tk.X, pady=5)
 
         ttk.Button(move_frame, text="移动到世界坐标", command=self.move_to_world_coordinate).pack(fill=tk.X, pady=2)
         ttk.Button(move_frame, text="回家", command=self.move_home).pack(fill=tk.X, pady=2)
-
+        self.suction_button = ttk.Button(suction_frame, text="吸取", command=self.toggle_suction)
+        self.suction_button.pack(fill=tk.X, padx=5, pady=5)
         # 相机内参设置
         intrinsic_frame = ttk.LabelFrame(control_frame, text="相机内参")
         intrinsic_frame.pack(fill=tk.X, pady=5)
@@ -599,15 +623,23 @@ class HandEyeCalibrationGUI:
         pixel_frame = ttk.LabelFrame(control_frame, text="像素坐标转世界坐标")
         pixel_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(pixel_frame, text="像素:").grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(pixel_frame, textvariable=self.pixel_x_var, width=10).grid(row=0, column=1, padx=5)
-        ttk.Entry(pixel_frame, textvariable=self.pixel_y_var, width=10).grid(row=0, column=3, padx=5)
+        # 添加转换方式选择下拉框
+        ttk.Label(pixel_frame, text="转换方式:").grid(row=0, column=0, sticky=tk.W)
+        self.conversion_method_var = tk.StringVar(value="matrix")
+        conversion_method_combo = ttk.Combobox(pixel_frame, textvariable=self.conversion_method_var,
+                                              values=["matrix", "nine_points"], state="readonly", width=12)
+        conversion_method_combo.grid(row=0, column=1, columnspan=2, padx=5, sticky=tk.W)
+        conversion_method_combo.set("matrix")  # 默认选择矩阵转换
 
-        ttk.Button(pixel_frame, text="转换", command=self.convert_pixel_to_world).grid(row=0, column=4, padx=5)
+        ttk.Label(pixel_frame, text="像素:").grid(row=1, column=0, sticky=tk.W)
+        ttk.Entry(pixel_frame, textvariable=self.pixel_x_var, width=10).grid(row=1, column=1, padx=5)
+        ttk.Entry(pixel_frame, textvariable=self.pixel_y_var, width=10).grid(row=1, column=2, padx=5)
 
-        ttk.Label(pixel_frame, text="世界:").grid(row=1, column=0, sticky=tk.W)
-        ttk.Entry(pixel_frame, textvariable=self.world_x_var, width=10).grid(row=1, column=1, padx=5)
-        ttk.Entry(pixel_frame, textvariable=self.world_y_var, width=10).grid(row=1, column=3, padx=5)
+        ttk.Button(pixel_frame, text="转换", command=self.convert_pixel_to_world).grid(row=1, column=3, padx=5)
+
+        ttk.Label(pixel_frame, text="世界:").grid(row=2, column=0, sticky=tk.W)
+        ttk.Entry(pixel_frame, textvariable=self.world_x_var, width=10).grid(row=2, column=1, padx=5)
+        ttk.Entry(pixel_frame, textvariable=self.world_y_var, width=10).grid(row=2, column=2, padx=5)
 
         # 张正友九点标定区域 (可隐藏)
         self.zhang_frame_container = ttk.LabelFrame(control_frame, text="张正友九点标定")
@@ -770,7 +802,7 @@ class HandEyeCalibrationGUI:
             self.robot_controller = URController(ip=ip)
             if self.robot_controller.is_connected():
                 self.robot_connected = True
-                self.connect_button.config(text="断开机械臂")  # 修改按钮文本
+                self.connect_button.config(text="断开机械臂", style="Red.TButton")  # 修改按钮文本
                 self.robot_status_label.config(text="已连接", foreground="green")
                 self.result_text.insert(tk.END, f"机械臂连接成功: {ip}\n")
                 # 启动位姿更新定时器
@@ -791,7 +823,7 @@ class HandEyeCalibrationGUI:
                 self.robot_controller = None
 
             self.robot_connected = False
-            self.connect_button.config(text="连接机械臂")  # 恢复按钮文本
+            self.connect_button.config(text="连接机械臂", style="")  # 恢复按钮文本
             self.robot_status_label.config(text="未连接", foreground="black")
             self.result_text.insert(tk.END, "机械臂已断开连接\n")
         except Exception as e:
@@ -930,11 +962,35 @@ class HandEyeCalibrationGUI:
             speed = int(self.robot_speed.get())
             self.robot_controller.set_speed(speed / 100.0)
 
-            self.robot_controller.move_home()
+            self.robot_controller.run_point_j(RED_CAMERA)
             self.result_text.insert(tk.END, f"机械臂已回家 (速度: {speed}%)\n")
         except Exception as e:
             messagebox.showerror("错误", f"机械臂回家时出错: {str(e)}")
         self.result_text.see(tk.END)
+
+    def toggle_suction(self):
+        """切换吸放状态"""
+        if not self.robot_connected:
+            messagebox.showerror("错误", "请先连接机械臂")
+            return
+
+        try:
+            if not self.suction_state:
+                # 当前为释放状态，执行吸取
+                self.robot_controller.set_do(IO_QI, 1)  # 设置IO_QI为1，吸取
+                self.suction_button.config(text="释放", style="Red.TButton")  # 更改按钮文本和样式
+                self.suction_state = True
+                self.result_text.insert(tk.END, "发送吸取指令\n")
+            else:
+                # 当前为吸取状态，执行释放
+                self.robot_controller.set_do(IO_QI, 0)  # 设置IO_QI为0，释放
+                self.suction_button.config(text="吸取", style="")  # 恢复按钮文本和样式
+                self.suction_state = False
+                self.result_text.insert(tk.END, "发送释放指令\n")
+
+            self.result_text.see(tk.END)
+        except Exception as e:
+            messagebox.showerror("错误", f"吸放控制失败: {str(e)}")
 
     def load_image(self):
         """加载图像"""
@@ -1189,14 +1245,23 @@ class HandEyeCalibrationGUI:
             pixel_x = float(self.pixel_x_var.get())
             pixel_y = float(self.pixel_y_var.get())
 
-            # 调用标定器的转换方法
-            world_x, world_y = self.calibrator.pixel_to_world(pixel_x, pixel_y)
+            # 根据选择的转换方式执行不同的转换方法
+            conversion_method = self.conversion_method_var.get()
+
+            if conversion_method == "matrix":
+                # 使用矩阵转换方法
+                world_x, world_y = self.calibrator.pixel_to_world(pixel_x, pixel_y)
+            elif conversion_method == "nine_points":
+                # 使用九点标定转换方法
+                world_x, world_y = self.pixel_to_world_nine_points(pixel_x, pixel_y)
+            else:
+                raise ValueError(f"未知的转换方式: {conversion_method}")
 
             # 更新显示
             self.world_x_var.set(f"{world_x:.3f}")
             self.world_y_var.set(f"{world_y:.3f}")
 
-            self.result_text.insert(tk.END, f"像素坐标({pixel_x}, {pixel_y}) -> 世界坐标({world_x:.3f}, {world_y:.3f})\n")
+            self.result_text.insert(tk.END, f"像素坐标({pixel_x}, {pixel_y}) -> 世界坐标({world_x:.3f}, {world_y:.3f}) [{conversion_method}]\n")
             self.result_text.see(tk.END)
 
         except ValueError as e:
@@ -1661,6 +1726,51 @@ class HandEyeCalibrationGUI:
 
         except Exception as e:
             messagebox.showerror("错误", f"生成九点标定图像失败: {str(e)}")
+
+    def pixel_to_world_nine_points(self, pixel_x, pixel_y):
+        """
+        使用九点标定数据将像素坐标转换为世界坐标
+
+        Args:
+            pixel_x: 像素x坐标
+            pixel_y: 像素y坐标
+
+        Returns:
+            tuple: (world_x, world_y) 世界坐标
+        """
+        # 收集有效的九点标定数据
+        valid_points = [point for point in self.zhang_points_data
+                        if point and 'pixel_x' in point and 'world_x' in point]
+
+        if len(valid_points) < 4:
+            raise ValueError(f"至少需要4个有效标定点进行插值，当前只有{len(valid_points)}个")
+
+        # 提取像素坐标和世界坐标
+        pixel_coords = np.array([[point['pixel_x'], point['pixel_y']] for point in valid_points])
+        world_coords = np.array([[point['world_x'], point['world_y']] for point in valid_points])
+
+        # 使用scipy的griddata进行插值
+        try:
+            from scipy.interpolate import griddata
+            world_x, world_y = griddata(
+                pixel_coords,
+                world_coords,
+                (pixel_x, pixel_y),
+                method='linear'
+            )
+            return world_x, world_y
+        except Exception as e:
+            # 如果线性插值失败，尝试使用最近邻插值
+            try:
+                world_x, world_y = griddata(
+                    pixel_coords,
+                    world_coords,
+                    (pixel_x, pixel_y),
+                    method='nearest'
+                )
+                return world_x, world_y
+            except Exception:
+                raise RuntimeError(f"无法使用九点标定数据进行坐标转换: {str(e)}")
 
 def pixel_to_world_coordinates(pixel_x, pixel_y,npz_path='camera_params.npz'):
     """

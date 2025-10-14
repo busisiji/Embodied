@@ -8,6 +8,8 @@
 import os
 import sys
 
+from api.models.user_model import get_admin_user_id
+
 C_PUCT = 5
 # Dirichlet噪声的ε参数，表示添加噪声的比例或强度
 EPS = 0.25
@@ -38,6 +40,7 @@ IS_WINDOW = True
 # 数据集是否执行镜像翻转
 SHOULD_FLIP = False
 
+ADMIN_ID = get_admin_user_id()
 # 获取当前文件的目录
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # 将项目根目录添加到系统路径中
@@ -47,11 +50,11 @@ DATA_DIR = os.path.join(current_dir, "datas")
 # 模型目录（训练产生与加载的模型文件）
 MODEL_DIR = os.path.join(current_dir, "models")
 # 模型目录
-MODELS = os.path.join(MODEL_DIR, "admin")
+MODELS = os.path.join(MODEL_DIR, ADMIN_ID,'pkl')
 # 模型地址
-MODEL_PATH = os.path.join(MODELS, "onnx/current_policy_7100.onnx")
+MODEL_PATH = os.path.join(MODEL_DIR,'onnx' ,"current_policy_7100.onnx")
 # 训练数据容器目录
-DATAS = os.path.join(DATA_DIR, "admin")
+DATAS = os.path.join(DATA_DIR, ADMIN_ID)
 # 训练数据容器地址
 DATA_SELFPLAY = os.path.join(DATAS, "collect")
 DATA_BUFFER_PATH = os.path.join(DATAS, "collect/data_20250723_130251_iters1514.pkl")

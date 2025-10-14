@@ -3,6 +3,11 @@
 import os
 import sys
 
+from src.cchessAI.game import Game
+from src.cchessAI.mcts import MCTS_AI
+from src.cchessAI.net import PolicyValueNet
+from src.cchessAI.parameters import MODELS
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # 获取项目根目录（cchess）
 project_root = os.path.dirname(current_dir)
@@ -11,11 +16,8 @@ project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from core.game import Game
 import cchess
-from core.mcts import MCTS_AI
 from src.cchessAI.tools import move_id2move_action, move_action2move_id
-from core.net import PolicyValueNet
 
 
 class Human:
@@ -50,7 +52,7 @@ class Human:
 
 def run():
     # 加载模型
-    policy_value_net = PolicyValueNet(model_file='models/admin/trt/current_policy_batch7483_202507170806.trt', use_gpu=True)
+    policy_value_net = PolicyValueNet(model=os.path.join(MODELS,'current_policy.pkl'), use_gpu=True)
 
     # 创建 MCTS 玩家
     mcts_player = MCTS_AI(policy_value_net.policy_value_fn,c_puct=3, n_playout=1200)
@@ -61,10 +63,10 @@ def run():
     board = cchess.Board()
     game = Game(board)
 
-    # # 开始人机对战（人类先手）
-    # game.start_play(player1=human, player0=mcts_player, is_shown=True)
+    # 开始人机对战（人类先手）
+    game.start_play(player1=human, player0=mcts_player, is_shown=True)
     # 开始人机对战（机器先手）
-    game.start_play_with_mixed_strategy(player0=human, player1=mcts_player, is_shown=True,use_computerplay=True)
+    # game.start_play_with_mixed_strategy(player0=human, player1=mcts_player, is_shown=True,use_computerplay=True)
 
 if __name__ == '__main__':
     run()

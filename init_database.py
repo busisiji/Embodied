@@ -5,13 +5,9 @@
 """
 from api.models.chess_config_model import ChessGameConfig
 from api.models.model_managers import UserManager
-from api.models.user_model import User
 from api.models.config_model import ConfigTable, ConfigField, ConfigData
-from api.models.chess_file_models import DataFile, ModelFile
-from api.db.database import db
 from datetime import datetime
 
-from api.services.model_service import ModelService
 
 
 def init_all_tables():
