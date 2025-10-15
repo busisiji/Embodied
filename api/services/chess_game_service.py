@@ -13,8 +13,6 @@ from argparse import Namespace
 import logging
 from api.utils.decorators import handle_service_exceptions
 from api.utils.websocket_utils import send_error_notification_sync
-from runner.chessPlayFlow_runner import create_parser, ChessPlayFlow
-from src.cchessAI.core.frontend import get_active_window_ports
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -68,6 +66,7 @@ class ChessGameService:
         """
         创建参数命名空间对象，只更新非None的参数
         """
+        from runner.chessPlayFlow_runner import create_parser
 
         parser = create_parser()
 
@@ -98,6 +97,8 @@ class ChessGameService:
                 ...
         """
         try:
+            from runner.chessPlayFlow_runner import  ChessPlayFlow
+
             if self.game_status == 'running':
                 return {
                     "success": False,
@@ -502,6 +503,8 @@ class ChessGameService:
         获取当前活跃窗口的端口信息
         """
         try:
+            from src.cchessAI.frontend import get_active_window_ports
+
             active_windows = get_active_window_ports()
             return {
                 "active_windows": active_windows

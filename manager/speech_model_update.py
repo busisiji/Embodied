@@ -1,4 +1,4 @@
-# model_update.py
+# speech_model_update.py
 import os
 import json
 
@@ -130,6 +130,12 @@ def suggest_vocabulary_for_chess():
         # 语气词
         "啊", "啦", "吧",  "呢", "了", "的",
 
+        # 水果
+        "苹果", "香蕉", "橘子", "番茄", "香蕉", "柑橘", "梨",
+
+        # 颜色
+        "红", "蓝", "绿", "黄", "紫", "黑", "白", "灰", "棕", "粉", "橙",
+
         # 常见名词
         "东西", "地方", "时候", "时间", "问题", "情况", "方法", "工作",
     ]
@@ -245,7 +251,7 @@ def main():
         print("\n创建完成！")
         print("\n使用说明:")
         print("1. 词汇表文件 (words.txt) 可用于限制识别范围，提高准确率")
-        print("2. 在 speech_service.py 中可以通过以下方式使用:")
+        print("2. 在 speech_manager.py 中可以通过以下方式使用:")
         print("   recognizer = KaldiRecognizer(model, sample_rate, json.dumps(vocab_words, ensure_ascii=False))")
         print("3. 词汇表将帮助模型专注于象棋游戏相关词汇，提高识别准确率")
 

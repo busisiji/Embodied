@@ -1,205 +1,62 @@
+# file: /media/jetson/KESU/V10.14/Embodied/runner/chessPlayFlow/chess_camera.py
+
 import asyncio
 import os
 import threading
 import time
+from typing import Optional, Tuple, List
 
 import cv2
 import numpy as np
 
-from parameters import WORLD_POINTS_R, WORLD_POINTS_RCV, WORLD_POINTS_B, CHESS_POINTS_R, CHESS_POINTS_RCV_H, \
-    CHESS_POINTS_B, CHESS_POINTS_RCV_L
 from src.cchessYolo.detect_chess_box import select_corner_circles, order_points, calculate_box_corners
-from utils.calibrationManager import calculate_perspective_transform_matrices
-from utils.corrected import get_corrected_chessboard_points, correct_chessboard_to_square
+from manager.manager import system_manager  # 导入系统管理器以访问camera_manager
 
 
-class ChessPlayFlowCamera():
+class ChessPlayFlowCamera:
+    """
+    象棋对弈流程中的相机管理模块
+    负责棋盘识别、图像捕获和视觉处理相关功能
+    """
+
     def __init__(self, parent):
-        self.parent = parent
-    # 相机
-    def setup_camera_windows(self):
         """
-        初始化相机显示窗口
-        """
-        if self.parent.args.show_camera:
-            try:
-                # 先清理可能存在的窗口
-                cv2.destroyAllWindows()
-                # 创建新窗口
-                cv2.namedWindow("camera", cv2.WINDOW_AUTOSIZE | cv2.WINDOW_KEEPRATIO)
-            except cv2.error as e:
-                print(f"⚠️ 创建窗口时出错: {e}")
-                self.parent.args.show_camera = False
-
-    def update_camera_display(self, image, window_name="camera"):
-        """
-        更新相机显示
-        """
-        if self.parent.args.show_camera and image is not None:
-            try:
-                # 检查窗口是否存在
-                if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
-                    # 如果窗口不存在，重新创建
-                    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_KEEPRATIO)
-
-                # 显示图像
-                cv2.startWindowThread()
-                cv2.imshow(window_name, image)
-
-                # 使用1ms等待，检查按键事件
-                key = cv2.waitKey(1) & 0xFF
-
-                # 检查是否按下ESC键(27)或窗口被关闭
-                if key == 27 or cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:  # ESC键
-                    print("ESC键被按下，关闭显示窗口")
-                    cv2.destroyAllWindows()
-                    self.parent.args.show_camera = False  # 禁用后续显示
-
-            except cv2.error as e:
-                print(f"⚠️ 更新显示时出错: {e}")
-
-    def cleanup_camera_windows(self):
-        """
-        清理相机窗口
-        """
-        try:
-            if self.parent.args.show_camera:
-                cv2.destroyAllWindows()
-        except:
-            pass
-
-    def capture_stable_image(self, num_frames=5, is_chessboard=True):
-        """
-        捕获稳定的图像和深度信息（通过多帧平均减少噪声）
+        初始化相机管理器
 
         Args:
-            num_frames: captured帧数用于平均
-            is_chessboard: 是否为棋盘图像，需要进行畸变矫正
+            parent: 父级对象（ChessPlayFlow）
+        """
+        self.parent = parent
+        self._recognition_lock = threading.Lock()  # 识别任务锁，防止并发识别
+
+    def capture_stable_image(self, num_frames: int = 5) -> Tuple[Optional[np.ndarray], Optional]:
+        """
+        通过camera_manager捕获稳定的图像
+
+        Args:
+            num_frames: 用于平均的帧数
 
         Returns:
-            tuple: (稳定图像, 深度帧)
+            tuple: (图像, 深度帧) 或 (None, None) 如果失败
         """
-        max_retry_attempts = 100  # 最大重试次数
-        retry_count = 0
+        if not system_manager.camera_manager or not system_manager.camera_manager.running:
+            print("⚠️ 相机未初始化")
+            return None, None
 
-        while retry_count < max_retry_attempts:
-            if self.parent.pipeline is None:
-                # 尝试重新初始化相机
-                asyncio.run(self.parent.speak_cchess("相机未连接，正在重新连接相机"))
-                self.parent.init_camera()
+        # 使用camera_manager.capture_stable_image获取稳定图像
+        return system_manager.camera_manager.capture_stable_image(num_frames=num_frames)
 
-                if self.parent.pipeline is None:
-                    retry_count += 1
-                    asyncio.run(self.parent.speak_cchess(f"相机连接失败"))
-                    # 使用更短的等待时间，并定期检查游戏状态
-                    for _ in range(50):  # 5秒分成50个0.1秒
-                        surrendered, paused = self.parent.check_game_state()
-                        if surrendered:
-                            return None, None
-                        time.sleep(0.1)
-                    continue
+    def update_camera_display(self, image: np.ndarray) -> None:
+        """
+        通过camera_manager更新相机显示
 
-            try:
-                frames_list = []
-                depth_frames_list = []
+        Args:
+            image: 要显示的图像
+        """
+        if system_manager.camera_manager and image is not None:
+            system_manager.camera_manager.update_camera_display(image)
 
-                # 捕获多帧图像
-                for i in range(num_frames):
-                    # 定期检查游戏状态
-                    if self.parent.surrendered:
-                        return None, None
-
-                    frames = self.parent.pipeline.wait_for_frames(timeout_ms=5000)  # 设置超时时间
-                    color_frame = frames.get_color_frame()
-                    depth_frame = frames.get_depth_frame()
-
-                    if color_frame and depth_frame:
-                        frame = np.asanyarray(color_frame.get_data())
-                        frames_list.append(frame)
-                        depth_frames_list.append(depth_frame)
-                    else:
-                        continue
-
-                    # 短暂等待，也定期检查游戏状态
-                    for _ in range(10):  # 0.1秒分成10个0.01秒
-                        if self.parent.surrendered:
-                            return None, None
-                        time.sleep(0.01)
-
-                if not frames_list:
-                    raise Exception("无法捕获有效图像帧")
-
-                # 如果只捕获到一帧，直接返回
-                if len(frames_list) == 1:
-                    result_frame = frames_list[0]
-                    latest_depth_frame = depth_frames_list[0]
-                else:
-                    # 多帧平均以减少噪声（仅对彩色图像）
-                    result_frame = np.mean(frames_list, axis=0).astype(np.uint8)
-                    # 使用最新的深度帧
-                    latest_depth_frame = depth_frames_list[-1]
-
-                world_r = WORLD_POINTS_R
-                world_b = WORLD_POINTS_B
-                world_rcv = WORLD_POINTS_RCV
-                self.parent.chess_r = CHESS_POINTS_R
-                self.parent.chess_b = CHESS_POINTS_B
-                self.parent.chess_rcv_h = CHESS_POINTS_RCV_H
-                self.parent.chess_rcv_l = CHESS_POINTS_RCV_L
-
-                # 畸变矫正
-                if is_chessboard:
-                    self.parent.chess_r, self.parent.m_R = get_corrected_chessboard_points(CHESS_POINTS_R)
-                    self.parent.chess_b, self.parent.m_B = get_corrected_chessboard_points(CHESS_POINTS_B)
-                    self.parent.chess_rcv_h, self.parent.m_RCV_h = get_corrected_chessboard_points(CHESS_POINTS_RCV_H)
-                    self.parent.chess_rcv_l, self.parent.m_RCV_l = get_corrected_chessboard_points(CHESS_POINTS_RCV_L)
-
-                    if self.parent.side == 'red':
-                        result_frame, _ = correct_chessboard_to_square(result_frame, CHESS_POINTS_R, self.parent.m_R)
-                    else:
-                        result_frame, _ = correct_chessboard_to_square(result_frame, CHESS_POINTS_B, self.parent.m_B)
-
-                self.parent.forward_matrix_r, self.parent.inverse_matrix_r = calculate_perspective_transform_matrices(world_r, self.parent.chess_r)
-                self.parent.forward_matrix_b, self.parent.inverse_matrix_b = calculate_perspective_transform_matrices(world_b, self.parent.chess_b)
-                self.parent.forward_matrix_rcv_h, self.parent.inverse_matrix_rcv_h = calculate_perspective_transform_matrices(world_rcv, self.parent.chess_rcv_h)
-                self.parent.forward_matrix_rcv_l, self.parent.inverse_matrix_rcv_l = calculate_perspective_transform_matrices(world_rcv, self.parent.chess_rcv_l)
-                if retry_count > 0:
-                    asyncio.run(self.parent.speak_cchess(f"相机图像获取成功"))
-
-                return result_frame, latest_depth_frame
-
-            except Exception as e:
-                # 定期检查游戏状态
-                if self.parent.surrendered:
-                    return None, None
-
-                retry_count += 1
-                error_msg = f"捕获图像失败，第{retry_count}次重试"
-                print(f"⚠️ {error_msg}: {e}")
-                asyncio.run(self.parent.speak_cchess(error_msg))
-
-                # 如果达到最大重试次数，停止重试
-                if retry_count >= max_retry_attempts:
-                    asyncio.run(self.parent.speak_cchess("已达最大重试次数，无法获取图像"))
-                    break
-
-                # 等待一段时间后重试，也定期检查游戏状态
-                for _ in range(30):  # 3秒分成30个0.1秒
-                    if self.parent.surrendered:
-                        return None, None
-                    time.sleep(0.1)
-
-                # 尝试重新初始化相机
-                asyncio.run(self.parent.speak_cchess("正在重新初始化相机"))
-                self.parent.pipeline = None
-                self.parent.init_camera()
-
-        # 如果所有重试都失败，返回None
-        asyncio.run(self.parent.speak_cchess("无法捕获稳定图像，请检查相机连接"))
-        return None, None
-
-    # 识别
-    def detect_chess_box(self, max_attempts=10):
+    def detect_chess_box(self, max_attempts: int = 10) -> Optional[List]:
         """
         识别棋盒位置，只支持检测4个圆角标记
 
@@ -214,10 +71,15 @@ class ChessPlayFlowCamera():
 
         for attempt in range(max_attempts):
             print(f"🔍 尝试识别棋盒位置 {attempt + 1}/{max_attempts}...")
+            # 检查是否需要停止
+            if self.parent.surrendered or self.parent._stop_event.is_set():
+                return None
+
             # 捕获图像
             rcv_image, rcv_depth = self.capture_stable_image()
             if rcv_image is None:
                 print("⚠️ 无法捕获收子区图像")
+                time.sleep(0.5)  # 等待一段时间再重试
                 continue
 
             # 创建用于显示的图像副本
@@ -247,7 +109,6 @@ class ChessPlayFlowCamera():
                     cv2.circle(display_image, (x, y), r, (0, 255, 0), 2)
                     # 绘制圆心
                     cv2.circle(display_image, (x, y), 2, (0, 0, 255), 3)
-
 
             # 只有检测到恰好4个圆时才继续处理
             if circles is not None and len(circles) == 4:
@@ -290,6 +151,9 @@ class ChessPlayFlowCamera():
                     print(f"🔍 检测到{len(circles)}个圆，需要恰好4个圆")
                 else:
                     print("🔍 未检测到任何圆形标记")
+
+                time.sleep(0.5)  # 等待一段时间再重试
+
         return chess_box_points
 
     def recognize_chessboard(self, is_run_red=False, half_board=None):
@@ -438,3 +302,13 @@ class ChessPlayFlowCamera():
 
         print("✅ 棋盘识别完成")
         return chess_result
+
+    def cleanup_camera_windows(self) -> None:
+        """
+        清理相机窗口资源
+        """
+        try:
+            if system_manager.camera_manager:
+                system_manager.camera_manager.cleanup_camera_windows()
+        except Exception as e:
+            print(f"⚠️ 清理相机窗口时出错: {e}")

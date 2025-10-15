@@ -9,7 +9,7 @@ from parameters import WORLD_POINTS_R, WORLD_POINTS_RCV, WORLD_POINTS_B, CHESS_P
     IO_QI, RCV_H_LAY, R_RO_B
 from runner.runner_hand_eye import pixel_to_world_coordinates
 from src.cchessAI import cchess
-from src.cchessAI.core.game import uci_to_coordinates, get_best_move_with_computer_play, execute_computer_move
+from src.cchessAI.game import uci_to_coordinates, get_best_move_with_computer_play, execute_computer_move
 from utils.tools import move_id2move_action
 
 
@@ -198,11 +198,11 @@ class ChessPlayFlowUtils():
             w_x,w_y = pixel_to_world_coordinates(p_x,p_y)
         elif camera_type == 'BLACK_CAMERA':
             p_x,p_y = 1280-p_x,720-p_y
-            w_x,w_y = pixel_to_world_coordinates(p_x,p_y,inverse_matrix=True)
+            w_x,w_y = pixel_to_world_coordinates(p_x,p_y,camera_type=camera_type)
             w_x = w_x + BLACK_CAMERA[0] - RED_CAMERA[0] + R_RO_B[0]
             w_y = w_y + BLACK_CAMERA[1] - RED_CAMERA[1] + R_RO_B[1]
         elif camera_type == 'RCV_CAMERA':
-            w_x,w_y = pixel_to_world_coordinates(p_x,p_y,inverse_matrix=True)
+            w_x,w_y = pixel_to_world_coordinates(p_x,p_y,camera_type=camera_type)
             w_x = w_x + RCV_CAMERA[0] - RED_CAMERA[0]
             w_y = w_y + RCV_CAMERA[1] - RED_CAMERA[1]
         return w_x,w_y

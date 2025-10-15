@@ -28,7 +28,7 @@ class HandEyeCalibration:
 
         # 畸变参数
         self.distortion = np.array([[0, 0, 0.0, 0.0, 0]])
-        self.filename = os.path.join(dir,'calibration','output',filename)
+        self.filename = os.path.join(dir, 'calibration', 'output', filename)
 
         # 相机外参矩阵 (初始为单位矩阵)
         self.R_camera2base = np.eye(3, dtype=np.float64)  # 旋转矩阵
@@ -42,13 +42,17 @@ class HandEyeCalibration:
         # 初始化时尝试加载相机参数
         self.load_camera_parameters()
 
-    def save_camera_parameters(self, filename='calibration/output/camera_params.npz'):
+    def save_camera_parameters(self, filename=None):
         """
         保存相机参数到文件
 
         Args:
-            filename: 保存的文件名
+            filename: 保存的文件名，如果为None则使用实例的filename属性
         """
+        # 如果没有提供文件名，使用实例属性
+        if filename is None:
+            filename = self.filename
+
         # 确保目录存在
         directory = os.path.dirname(filename)
         if directory and not os.path.exists(directory):
@@ -73,14 +77,15 @@ class HandEyeCalibration:
         np.savez(filename, **save_data)
         print(f"相机参数已保存到 {filename}")
 
-    def load_camera_parameters(self):
+    def load_camera_parameters(self,filename=None):
         """
         从文件加载相机参数
 
         Args:
             filename: 保存的文件名
         """
-        filename = self.filename
+        if filename is None:
+            filename = self.filename
 
         if os.path.exists(filename):
             try:
@@ -458,6 +463,17 @@ class HandEyeCalibrationGUI:
         control_frame = ttk.LabelFrame(self.control_scrollable_frame, text="控制面板")
         control_frame.pack(fill=tk.BOTH, expand=True)
 
+        # 添加文件名设置区域
+        filename_frame = ttk.LabelFrame(control_frame, text="参数文件设置")
+        filename_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(filename_frame, text="参数文件名:").grid(row=0, column=0, sticky=tk.W)
+        self.filename_var = tk.StringVar(value="camera_params.npz")
+        filename_entry = ttk.Entry(filename_frame, textvariable=self.filename_var, width=25)
+        filename_entry.grid(row=0, column=1, padx=5, sticky=tk.EW)
+        # 更新按钮，用于重新加载参数
+        ttk.Button(filename_frame, text="重新加载", command=self.reload_camera_parameters).grid(row=0, column=2, padx=5)
+
         # 机械臂连接设置
         robot_frame = ttk.LabelFrame(control_frame, text="机械臂控制")
         robot_frame.pack(fill=tk.X, pady=5)
@@ -641,14 +657,14 @@ class HandEyeCalibrationGUI:
         ttk.Entry(pixel_frame, textvariable=self.world_x_var, width=10).grid(row=2, column=1, padx=5)
         ttk.Entry(pixel_frame, textvariable=self.world_y_var, width=10).grid(row=2, column=2, padx=5)
 
-        # 张正友九点标定区域 (可隐藏)
-        self.zhang_frame_container = ttk.LabelFrame(control_frame, text="张正友九点标定")
+        # 九点标定区域 (可隐藏)
+        self.zhang_frame_container = ttk.LabelFrame(control_frame, text="九点标定")
         self.zhang_frame_container.pack(fill=tk.X, pady=5)
 
         zhang_header = ttk.Frame(self.zhang_frame_container)
         zhang_header.pack(fill=tk.X)
 
-        zhang_title = ttk.Label(zhang_header, text="张正友九点标定")
+        zhang_title = ttk.Label(zhang_header, text="九点标定")
         zhang_title.pack(side=tk.LEFT)
 
         self.zhang_toggle_btn = ttk.Button(zhang_header, text="隐藏", width=5, command=lambda: self.toggle_collapsible_section('zhang'))
@@ -743,6 +759,21 @@ class HandEyeCalibrationGUI:
 
         self.data_listbox = tk.Listbox(data_frame, height=8)
         self.data_listbox.pack(fill=tk.BOTH, expand=True)
+
+    def reload_camera_parameters(self):
+        """重新加载相机参数"""
+        filename = self.filename_var.get()
+        if filename:
+            # 更新calibrator的文件名
+            self.calibrator.filename = os.path.join(dir, 'calibration', 'output', filename)
+            # 重新加载参数
+            if self.calibrator.load_camera_parameters():
+                # 更新界面显示
+                self.update_camera_params_display()
+                self.result_text.insert(tk.END, f"已重新加载参数文件: {filename}\n")
+            else:
+                self.result_text.insert(tk.END, f"加载参数文件失败: {filename}\n")
+            self.result_text.see(tk.END)
 
     def toggle_control_panel(self):
         """切换控制面板显示状态"""
@@ -1199,7 +1230,7 @@ class HandEyeCalibrationGUI:
             self.result_text.insert(tk.END, f"畸变系数:\n{dist}\n")
             self.result_text.see(tk.END)
 
-            calib.save_camera_parameters()
+            calib.save_camera_parameters(os.path.join(dir, 'calibration', 'output', self.filename_var.get()))
 
             messagebox.showinfo("标定完成", f"相机内参标定完成!\n重投影误差: {ret:.3f} pixels")
 
@@ -1647,7 +1678,7 @@ class HandEyeCalibrationGUI:
             self.result_text.see(tk.END)
 
             # 保存外参到文件
-            self.calibrator.save_camera_parameters()
+            self.calibrator.save_camera_parameters(os.path.join(dir, 'calibration', 'output', self.filename_var.get()))
 
             messagebox.showinfo("标定完成", "外参标定已完成!")
 
@@ -1772,7 +1803,7 @@ class HandEyeCalibrationGUI:
             except Exception:
                 raise RuntimeError(f"无法使用九点标定数据进行坐标转换: {str(e)}")
 
-def pixel_to_world_coordinates(pixel_x, pixel_y,npz_path='camera_params.npz'):
+def pixel_to_world_coordinates(pixel_x, pixel_y,camera_type='RED_CAMERA'):
     """
     将像素坐标转换为世界坐标
 
@@ -1783,6 +1814,11 @@ def pixel_to_world_coordinates(pixel_x, pixel_y,npz_path='camera_params.npz'):
     Returns:
         tuple: (world_x, world_y) 世界坐标
     """
+    if camera_type=='RED_CAMERA':
+        npz_path='camera_params_r.npz'
+    elif camera_type=='BLUE_CAMERA':
+        npz_path='camera_params_b.npz'
+
     calibrator = HandEyeCalibration(npz_path)
 
     # 步骤1: 去除畸变

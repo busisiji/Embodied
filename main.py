@@ -7,6 +7,7 @@
 # 添加全局异常处理器；
 # 启动 Uvicorn 服务器。
 import argparse
+import asyncio
 import sys
 import os
 import time
@@ -19,6 +20,8 @@ from starlette.staticfiles import StaticFiles
 
 from api.exceptions.handler import add_exception_handlers
 from api.middleware.request_logger import log_requests
+from manager.manager import system_manager
+from runner.fruitSort_runner import FruitSortingApp
 
 from src.tts_utils.edgeTTS import EdgeTTSWrapper
 
@@ -36,36 +39,26 @@ from init_database import init_database
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    应用生命周期管理器 - 在这里初始化所有组件
-    """
-    from initialization_manager import initialize_components, cleanup_components
+    # 初始化系统管理器
+    system_manager.initialize()
 
-    start_time = time.time()
-    print("Application startup - 初始化所有组件")
-    print("=" * 50)
+    # 创建应用实例
+    fruit_app = FruitSortingApp()
 
-    # 初始化所有组件
-    init_start_time = time.time()
-    await initialize_components()
-    init_duration = time.time() - init_start_time
-    print(f"组件初始化耗时: {init_duration:.2f} 秒")
-    print("=" * 50)
+    try:
+        # 启动水果分拣
+        await fruit_app.start_sorting()
+        yield  # 应用程序在此处运行
+    except Exception as e:
+        print(f"应用程序启动错误: {e}")
+    finally:
+        # 清理资源
+        system_manager.cleanup()
+        print("程序退出")
 
-    yield
 
-    # shutdown事件处理逻辑
-    shutdown_start_time = time.time()
-    print("Application shutdown")
-    await cleanup_components()
-    shutdown_duration = time.time() - shutdown_start_time
-    print(f"组件清理耗时: {shutdown_duration:.2f} 秒")
-
-    total_duration = time.time() - start_time
-    print(f"应用总运行时间: {total_duration:.2f} 秒")
-
-# app = FastAPI(lifespan=lifespan,debug=False)
-app = FastAPI(debug=False)
+app = FastAPI(lifespan=lifespan,debug=False)
+# app = FastAPI(debug=False)
 #
 # 添加CORS中间件
 app.add_middleware(
@@ -114,8 +107,6 @@ if __name__ == "__main__":
     print("🚀 正在启动 API 服务...")
     print(f"🌐 监听地址: http://0.0.0.0:{args.port}")
     print(f"⚙️  Debug 模式: {'开启' if app.debug else '关闭'}")
-    tts = EdgeTTSWrapper(voice="zh-CN-XiaoxiaoNeural")
-    tts.speak("API启动")
     # 使用支持WebSocket的配置启动
     uvicorn.run("main:app", host="0.0.0.0", port=args.port, workers=1, log_level="info", ws="websockets")
 

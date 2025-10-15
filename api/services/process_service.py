@@ -14,10 +14,10 @@ from api.utils.decorators import handle_service_exceptions
 from api.utils.websocket_utils import send_error_notification_sync
 from src.cchessAI import cchess
 from src.cchessAI.cchess import svg as chessSvg
-from src.cchessAI.core.frontend import get_chess_window
-from src.cchessAI.core.game import Game
-from src.cchessAI.core.mcts import MCTS_AI
-from src.cchessAI.core.net import PolicyValueNet
+from src.cchessAI.frontend import get_chess_window
+from src.cchessAI.game import Game
+from src.cchessAI.mcts import MCTS_AI
+from src.cchessAI.net import PolicyValueNet
 from utils.tools import move_id2move_action, move_action2move_id
 
 # 配置日志

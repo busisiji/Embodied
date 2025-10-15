@@ -9,8 +9,9 @@ def get_admin_user_id():
     """
     try:
         # 方法1: 通过用户名查找admin用户
-        admin_user = User.get(User.name == 'admin')
-        return admin_user.user_id
+        # admin_user = User.get(User.name == 'admin')
+        # return admin_user.user_id
+        return "user_1759917156490"
     except User.DoesNotExist:
         # 如果admin用户不存在，可能需要先创建
         return 'admin'

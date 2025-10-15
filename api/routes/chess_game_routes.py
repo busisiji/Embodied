@@ -10,7 +10,6 @@ from api.models.user_model import User
 from api.services.auth_service import get_current_user_from_request
 from api.utils.decorators import handle_route_exceptions, format_response
 from api.utils.response_utils import format_response_data
-from src.cchessAI.core.frontend import get_active_window_ports
 
 router = APIRouter(prefix="/chess-game", tags=["象棋对弈"])
 
@@ -191,6 +190,8 @@ def get_window_ports(current_user: User = Depends(get_current_user_from_request)
     获取当前仍在使用的所有窗口的端口
     """
     try:
+        from src.cchessAI.frontend import get_active_window_ports
+
         active_windows = get_active_window_ports()
         return format_response_data({
             "active_windows": active_windows

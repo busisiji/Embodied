@@ -10,7 +10,7 @@ from api.models.user_model import User
 from api.services.auth_service import login_user, register_user
 from api.services.user_service import create_user
 from api.utils.websocket_utils import send_error_notification_sync
-from src.cchessAI.parameters import MODELS, DATA_SELFPLAY, MODEL_USER_PATH, DATA_USER_PATH
+from src.cchessAI.parameters import MODELS, DATA_SELFPLAY, MODEL_DIR, DATA_DIR
 
 # 导入WebSocket管理器
 from api.utils.decorators import handle_service_exceptions
@@ -30,14 +30,14 @@ class ModelService:
         列出所有可用的模型
         """
         models = []
-        if os.path.exists(MODEL_USER_PATH):
+        if os.path.exists(MODEL_DIR):
             # 使用 os.walk 遍历所有子目录
-            for root, dirs, files in os.walk(MODEL_USER_PATH):
+            for root, dirs, files in os.walk(MODEL_DIR):
                 for file in files:
                     if file.endswith((".pkl", ".onnx", ".trt")) and file != 'training_state.pkl':
                         file_path = os.path.join(root, file)
                         # 根据路径分离出 user_id 和 type 字段
-                        relative_path = os.path.relpath(root, MODEL_USER_PATH)
+                        relative_path = os.path.relpath(root, MODEL_DIR)
 
                         if relative_path == ".":
                             # 根目录下的模型文件，user_id 设为 "system"，type 设为 "root"
@@ -73,14 +73,14 @@ class ModelService:
         列出所有采集的数据文件
         """
         data_files = []
-        if os.path.exists(DATA_USER_PATH):
+        if os.path.exists(DATA_DIR):
             # 使用 os.walk 遍历所有子目录
-            for root, dirs, files in os.walk(DATA_USER_PATH):
+            for root, dirs, files in os.walk(DATA_DIR):
                 for file in files:
                     if file.endswith(".pkl"):
                         file_path = os.path.join(root, file)
                         # 根据路径分离出 user_id 和 type 字段
-                        relative_path = os.path.relpath(root, DATA_USER_PATH)
+                        relative_path = os.path.relpath(root, DATA_DIR)
 
                         if relative_path == ".":
                             # 根目录下没有文件，这种情况理论上不会出现
@@ -117,7 +117,7 @@ class ModelService:
         列出指定用户的所有数据文件
         """
         data_files = []
-        user_data_path = os.path.join(DATA_USER_PATH, f"{user_id}")
+        user_data_path = os.path.join(DATA_DIR, f"{user_id}")
         if os.path.exists(user_data_path):
             # 遍历所有子目录和文件
             for root, dirs, files in os.walk(user_data_path):
@@ -149,7 +149,7 @@ class ModelService:
         列出指定用户的所有模型文件
         """
         model_files = []
-        user_model_path = os.path.join(MODEL_USER_PATH, f"{user_id}")
+        user_model_path = os.path.join(MODEL_DIR, f"{user_id}")
         if os.path.exists(user_model_path):
             # 遍历所有子目录和文件
             for root, dirs, files in os.walk(user_model_path):
@@ -180,7 +180,7 @@ class ModelService:
         """
         获取指定用户的数据文件详细信息
         """
-        user_data_path = os.path.join(DATA_USER_PATH, f"{user_id}", file_name)
+        user_data_path = os.path.join(DATA_DIR, f"{user_id}", file_name)
 
         if not os.path.exists(user_data_path):
             error_msg = f"数据文件 {file_name} 不存在"
@@ -233,7 +233,7 @@ class ModelService:
         else:
             subdir = "pkl"  # 默认使用pkl目录
 
-        user_model_path = os.path.join(MODEL_USER_PATH, f"{user_id}", subdir, file_name)
+        user_model_path = os.path.join(MODEL_DIR, f"{user_id}", subdir, file_name)
 
         if not os.path.exists(user_model_path):
             error_msg = f"模型文件 {file_name} 不存在"
@@ -277,7 +277,7 @@ class ModelService:
         synced_count = 0
         removed_count = 0
         existing_count = 0
-        user_data_path = os.path.join(DATA_USER_PATH, f"user_{user_id}")
+        user_data_path = os.path.join(DATA_DIR, f"user_{user_id}")
 
         # 记录已存在的文件路径和新同步的文件路径
         existing_files = []
@@ -405,7 +405,7 @@ class ModelService:
         synced_count = 0
         removed_count = 0
         existing_count = 0
-        user_model_path = os.path.join(MODEL_USER_PATH, f"user_{user_id}")
+        user_model_path = os.path.join(MODEL_DIR, f"user_{user_id}")
 
         # 记录已存在的文件路径和新同步的文件路径
         existing_files = []
@@ -519,17 +519,17 @@ class ModelService:
         all_users_model = []
 
         # 处理数据文件目录
-        if os.path.exists(DATA_USER_PATH):
-            for item in os.listdir(DATA_USER_PATH):
-                item_path = os.path.join(DATA_USER_PATH, item)
+        if os.path.exists(DATA_DIR):
+            for item in os.listdir(DATA_DIR):
+                item_path = os.path.join(DATA_DIR, item)
                 if os.path.isdir(item_path) and item.startswith("user_"):
                     user_id = item
                     all_users_data.append(user_id)
 
         # 处理模型文件目录
-        if os.path.exists(MODEL_USER_PATH):
-            for item in os.listdir(MODEL_USER_PATH):
-                item_path = os.path.join(MODEL_USER_PATH, item)
+        if os.path.exists(MODEL_DIR):
+            for item in os.listdir(MODEL_DIR):
+                item_path = os.path.join(MODEL_DIR, item)
                 if os.path.isdir(item_path) and item.startswith("user_"):
                     user_id = item
                     all_users_model.append(user_id)
@@ -659,17 +659,17 @@ class ModelService:
         all_users_model = []
 
         # 处理数据文件目录
-        if os.path.exists(DATA_USER_PATH):
-            for item in os.listdir(DATA_USER_PATH):
-                item_path = os.path.join(DATA_USER_PATH, item)
+        if os.path.exists(DATA_DIR):
+            for item in os.listdir(DATA_DIR):
+                item_path = os.path.join(DATA_DIR, item)
                 if os.path.isdir(item_path) and item.startswith("user_"):
                     user_id = item
                     all_users_data.append(user_id)
 
         # 处理模型文件目录
-        if os.path.exists(MODEL_USER_PATH):
-            for item in os.listdir(MODEL_USER_PATH):
-                item_path = os.path.join(MODEL_USER_PATH, item)
+        if os.path.exists(MODEL_DIR):
+            for item in os.listdir(MODEL_DIR):
+                item_path = os.path.join(MODEL_DIR, item)
                 if os.path.isdir(item_path) and item.startswith("user_"):
                     user_id = item
                     all_users_model.append(user_id)
@@ -755,7 +755,7 @@ class ModelService:
         删除指定用户的数据文件（包括本地文件和数据库记录）
         """
         # 查找文件路径
-        user_data_path = os.path.join(DATA_USER_PATH, f"{user_id}")
+        user_data_path = os.path.join(DATA_DIR, f"{user_id}")
         file_path = None
 
         # 遍历用户目录查找文件
@@ -809,7 +809,7 @@ class ModelService:
         else:
             subdir = "pkl"  # 默认使用pkl目录
 
-        file_path = os.path.join(MODEL_USER_PATH, f"{user_id}", subdir, file_name)
+        file_path = os.path.join(MODEL_DIR, f"{user_id}", subdir, file_name)
 
         if not os.path.exists(file_path):
             error_msg = f"模型文件 {file_name} 不存在"
@@ -851,7 +851,7 @@ class ModelService:
         更新指定用户的数据文件（重命名文件和更新数据库记录）
         """
         # 查找原文件路径
-        user_data_path = os.path.join(DATA_USER_PATH, f"{user_id}")
+        user_data_path = os.path.join(DATA_DIR, f"{user_id}")
         old_file_path = None
 
         # 遍历用户目录查找文件
@@ -928,7 +928,7 @@ class ModelService:
         else:
             subdir = "pkl"  # 默认使用pkl目录
 
-        old_file_path = os.path.join(MODEL_USER_PATH, f"{user_id}", subdir, file_name)
+        old_file_path = os.path.join(MODEL_DIR, f"{user_id}", subdir, file_name)
 
         if not os.path.exists(old_file_path):
             error_msg = f"模型文件 {file_name} 不存在"
@@ -946,7 +946,7 @@ class ModelService:
         else:
             new_subdir = subdir  # 保持原目录
 
-        new_file_path = os.path.join(MODEL_USER_PATH, f"{user_id}", new_subdir, actual_new_file_name)
+        new_file_path = os.path.join(MODEL_DIR, f"{user_id}", new_subdir, actual_new_file_name)
 
         # 创建目标目录（如果不存在）
         try:

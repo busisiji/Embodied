@@ -15,7 +15,7 @@ from src.tts_utils.ekhoTTS import EkhoTTS
 
 
 voice_loop,voice_thread = None,None
-class TTSManager:
+class TTSServer:
     """
     统一的TTS管理器，根据系统环境和网络状态选择合适的TTS引擎
     """
