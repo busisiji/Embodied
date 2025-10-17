@@ -11,7 +11,7 @@ import numpy as np
 from dobot.arm.dobot_api import DobotApiDashboard, DobotApi, MyType, DobotApiFeedBack
 from api.utils.websocket_utils import send_error_notification_sync
 from parameters import RED_CAMERA, POINT_HOME, POINT_TRANSIT, POINT_DOWN, POINT_UP, SAC_CAMERA, FOUR_WORLD_SAC, \
-    POINT_SAC_DOWN, IO_QI, RCV_CAMERA, BLACK_CAMERA
+    POINT_SAC_DOWN, IO_QI, RCV_CAMERA, BLACK_CAMERA, FRUIT_CAMERA
 from utils.calibrationManager import pixel_to_world
 
 
@@ -113,7 +113,7 @@ class URController():
 
             # 上电和使能
             self.power_on()
-            self.enable_robot()
+            # self.enable_robot()
 
             # 设置初始速度和加速度
             self.set_speed(0.5)
@@ -1415,7 +1415,7 @@ if __name__ == "__main__":
         # urController.run_point_j(RED_CAMERA)
         # urController.pause()
         # print('暂停')
-        urController.run_point_j(BLACK_CAMERA)
+        # urController.run_point_j(BLACK_CAMERA)
         # urController.hll(5)
         # urController.resume()
         # print('继续')
@@ -1424,10 +1424,12 @@ if __name__ == "__main__":
 
         # urController.run_point_j([154,-377,205,-179,0.2,-179])
         # time.sleep(10)
+        # alarm_handling_test(urController)
+        # urController.set_do(IO_QI, 1)  # 吸合123456
         # urController.run_point_j(RED_CAMERA)
         # urController.run_point_j([175,-538,195,-179,0.2,-179])
         # time.sleep(5)
-        # urController.run_point_j(RED_CAMERA)
+        # urController.run_point_j(FRUIT_CAMERA)
         # urController.run_point_j(BLACK_CAMERA)
         # time.sleep(1000)
         # urController.run_point_j([125,-343,195,-179,0.2,-179])
@@ -1435,6 +1437,7 @@ if __name__ == "__main__":
         # urController.set_do(IO_QI, 0)  # 吸合123456
 
         # urController.run_point_j(RCV_CAMERA)
+        # alarm_handling_test(urController)
         time.sleep(3)
         # urController.wait_arrive(BLACK_CAMERA)
         # urController.move_to(-410.96, -299.49,260)-
@@ -1448,7 +1451,7 @@ if __name__ == "__main__":
         # print(urController.is_point_reachable(-400, -440,319)
 
         # time.sleep(1000)
-        # alarm_handling_test(urController)
+        alarm_handling_test(urController)
         # get_dis(urController,1,4)
         # get_dos(urController,1,4)
         # urController.set_do(5, 1)

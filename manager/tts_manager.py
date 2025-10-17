@@ -1,5 +1,6 @@
 # core/manager/tts_manager.py
 import asyncio
+import hashlib
 import os
 import platform
 import threading
@@ -9,9 +10,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import aiohttp
+
 from src.tts_utils.edgeTTS import EdgeTTSWrapper
 from src.tts_utils.ekhoTTS import EkhoTTS
-
+dir = os.path.dirname(os.path.abspath(__file__))
 class TTSManager:
     """
     统一的TTS管理器，根据系统环境和网络状态选择合适的TTS引擎
@@ -33,7 +35,7 @@ class TTSManager:
 
         self.was_listening = False
         self.is_network_available = True
-        self.tts_cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../src/tts_utils/tts_cache")
+        self.tts_cache_dir = os.path.join(dir, "../src/tts_utils/tts_cache")
 
         self._initialize_tts()
 
@@ -48,7 +50,7 @@ class TTSManager:
         print(f"系统类型: {self.system}")
         try:
             self.ekho_tts = None
-            self.tts_engine = EdgeTTSWrapper()
+            self.tts_engine = EdgeTTSWrapper(tts_cache_dir=self.tts_cache_dir)
             print("✅ 初始化 Edge TTS 引擎")
         except Exception as e:
             print(f"⚠️ Edge TTS 初始化失败: {e}")
@@ -146,29 +148,25 @@ class TTSManager:
             bool: 是否找到并播放了缓存音频
         """
         try:
-            # 根据文本生成文件名（这里简单地用文本作为文件名，实际可能需要更复杂的处理）
+            # filename = hashlib.md5(text.encode('utf-8')).hexdigest() + ".wav"
             filename = f"{text}.wav"
             cache_file_path = os.path.join(self.tts_cache_dir, filename)
 
             if os.path.exists(cache_file_path):
-                # 如果找到缓存文件，先尝试使用Edge TTS播报
-                if self.is_network_available and (self.system == "windows" or (self.system == "linux" and self.is_network_available)):
-                    try:
-                        print(f"使用Edge TTS播报缓存内容: {text}")
-                        await self._speak_with_edge_tts_async(text)
-                        return True
-                    except Exception as e:
-                        print(f"Edge TTS播报失败，回退到本地播放: {e}")
-
-                # 如果Edge TTS不可用或失败，则直接播放缓存的音频文件
                 print(f"播放缓存音频: {cache_file_path}")
 
-                # 使用系统命令或音频库播放缓存的音频文件
-                # 这里需要根据实际使用的音频播放库进行调整
-                import subprocess
-                process = await asyncio.create_subprocess_exec("aplay", cache_file_path)  # Linux示例
-                # Windows可以使用 'powershell' 和 ' MediaPlayer.MediaPlayer' 或其他方式
-                await process.communicate()
+                # 直接播放缓存的音频文件
+                if self.system == "windows":
+                    # Windows系统播放音频文件
+                    import subprocess
+                    process = await asyncio.create_subprocess_exec("powershell", "-c", f"Start-Process -FilePath '{cache_file_path}'")
+                    await process.communicate()
+                else:
+                    # Linux系统播放音频文件
+                    import subprocess
+                    process = await asyncio.create_subprocess_exec("cvlc", "--play-and-exit", cache_file_path)
+                    await process.communicate()
+
 
                 return True
         except Exception as e:
@@ -256,14 +254,12 @@ class TTSManager:
 
     async def _speak_with_edge_tts_async(self, text: str):
         """
-        异步使用Edge TTS引擎播报文本
+        异步使用Edge TTS引擎播报文本，并缓存音频文件
 
         Args:
             text (str): 要播报的文本
         """
         try:
-            if not self.tts_engine:
-                self.tts_engine = EdgeTTSWrapper()
             # 在线程池中运行阻塞的TTS调用
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(self.executor, self.tts_engine.speak, text)

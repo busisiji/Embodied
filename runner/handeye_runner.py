@@ -1,4 +1,7 @@
+# file: handeye_runner.py (GUI部分)
 import os
+from datetime import datetime
+
 import cv2
 import numpy as np
 from math import *
@@ -6,13 +9,13 @@ import json
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import sys
 
 from dobot.dobot_control import URController
 from parameters import FRUIT_CAMERA,RED_CAMERA,IO_QI
+import pyrealsense2 as rs
 
+from runner.handeye_service import HandEyeCalibrationService
 
 # 添加机械臂控制模块导入
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -20,7 +23,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 dir = os.path.dirname(os.path.abspath(__file__))
 
 class HandEyeCalibration:
-    def __init__(self,filename = 'camera_params.npz'):
+    def __init__(self,camera_params = 'RED_CAMERA'):
         # 相机内参矩阵 (示例参数，实际使用时需要相机标定获得)
         self.K = np.array([[0, 0, 0],
                            [0, 0, 0],
@@ -28,33 +31,30 @@ class HandEyeCalibration:
 
         # 畸变参数
         self.distortion = np.array([[0, 0, 0.0, 0.0, 0]])
-        self.filename = os.path.join(dir, 'calibration', 'output', filename)
+        self.filedir = os.path.join(dir, 'calibration', 'output')
+        self.filepath = os.path.join(self.filedir,camera_params, 'camera_params.npz')
 
         # 相机外参矩阵 (初始为单位矩阵)
         self.R_camera2base = np.eye(3, dtype=np.float64)  # 旋转矩阵
         self.T_camera2base = np.zeros((3, 1), dtype=np.float64)  # 平移向量
 
         # 棋盘格参数
-        self.target_x_number = 5  # 棋盘格内角点x方向数量
+        self.target_x_number = 11  # 棋盘格内角点x方向数量
         self.target_y_number = 8  # 棋盘格内角点y方向数量
         self.board_size = (self.target_x_number, self.target_y_number)
 
-        # 初始化时尝试加载相机参数
         self.load_camera_parameters()
 
-    def save_camera_parameters(self, filename=None):
+    def save_camera_parameters(self, filepath=None):
         """
         保存相机参数到文件
-
-        Args:
-            filename: 保存的文件名，如果为None则使用实例的filename属性
         """
         # 如果没有提供文件名，使用实例属性
-        if filename is None:
-            filename = self.filename
+        if filepath is None:
+            filepath = self.filepath
 
         # 确保目录存在
-        directory = os.path.dirname(filename)
+        directory = os.path.dirname(filepath)
         if directory and not os.path.exists(directory):
             os.makedirs(directory)
 
@@ -74,22 +74,22 @@ class HandEyeCalibration:
         if hasattr(self, 's_arr') and self.s_arr is not None:
             save_data['s_arr'] = self.s_arr
 
-        np.savez(filename, **save_data)
-        print(f"相机参数已保存到 {filename}")
+        np.savez(filepath, **save_data)
+        print(f"相机参数已保存到 {filepath}")
 
-    def load_camera_parameters(self,filename=None):
+    def load_camera_parameters(self,filepath=None):
         """
         从文件加载相机参数
 
         Args:
             filename: 保存的文件名
         """
-        if filename is None:
-            filename = self.filename
+        if filepath is None:
+            filepath = self.filepath
 
-        if os.path.exists(filename):
+        if os.path.exists(filepath):
             try:
-                data = np.load(filename, allow_pickle=True)
+                data = np.load(filepath, allow_pickle=True)
                 self.K = data['mtx']
                 self.distortion = data['dist']
 
@@ -107,13 +107,13 @@ class HandEyeCalibration:
                 if 's_arr' in data:
                     self.s_arr = data['s_arr']
 
-                print(f"相机参数已从 {filename} 加载")
+                print(f"相机参数已从 {filepath} 加载")
                 return True
             except Exception as e:
                 print(f"加载相机参数时出错: {e}")
                 return False
         else:
-            print(f"未找到相机参数文件 {filename}")
+            print(f"未找到相机参数文件 {filepath}")
             return False
 
     def draw_chessboard_corners(self, img):
@@ -252,97 +252,50 @@ class HandEyeCalibration:
 
         return world_x, world_y
 
-
-    def generate_chessboard_image(self, output_path='calibration/output/chessboard.png',
-                                 board_size=(7, 7), square_size=100, dpi=300):
+    def pixel_to_world_3d_realsense(self, pixel_x, pixel_y, depth_value, intrinsics, depth_scale):
         """
-        生成黑白棋盘格图像
-
-        Args:
-            output_path: 输出图像路径
-            board_size: 棋盘格尺寸(内角点数)
-            square_size: 每个格子的像素大小
-            dpi: 图像分辨率
-        """
-        # 计算图像尺寸
-        width = board_size[0] * square_size + 1 * square_size
-        height = board_size[1] * square_size + 1 * square_size
-
-        # 创建白色背景图像
-        img = np.ones((height, width), dtype=np.uint8) * 255
-
-        # 绘制黑白棋盘格
-        for i in range(board_size[1] + 1):
-            for j in range(board_size[0] + 1):
-                if (i + j) % 2 == 0:
-                    start_y = i * square_size + square_size
-                    end_y = start_y + square_size
-                    start_x = j * square_size + square_size
-                    end_x = start_x + square_size
-                    img[start_y:end_y, start_x:end_x] = 0  # 黑色方块
-
-        # 确保输出目录存在
-        directory = os.path.dirname(output_path)
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory)
-
-        # 保存图像
-        cv2.imwrite(output_path, img)
-        print(f"棋盘格图像已保存到 {output_path}")
-        return img
-
-    def generate_calibration_points_image(self, image_path, output_path='calibration/output/calibration_points.png'):
-        """
-        在图像上绘制九点标定的点位
-
-        Args:
-            image_path: 输入图像路径
-            output_path: 输出图像路径
-        """
-        # 读取图像
-        img = cv2.imread(image_path)
-        if img is None:
-            raise ValueError(f"无法读取图像: {image_path}")
-
-        # 绘制标定点
-        for i, point_data in enumerate(self.zhang_points_data):
-            if point_data and 'pixel_x' in point_data and 'pixel_y' in point_data:
-                # 获取像素坐标
-                x = int(point_data['pixel_x'])
-                y = int(point_data['pixel_y'])
-
-                # 绘制点位
-                cv2.circle(img, (x, y), 5, (0, 0, 255), -1)  # 红色实心圆
-                cv2.circle(img, (x, y), 10, (0, 255, 0), 2)   # 绿色圆环
-
-                # 添加点编号
-                cv2.putText(img, f"P{i+1}", (x+10, y-10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-
-        # 确保输出目录存在
-        directory = os.path.dirname(output_path)
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory)
-
-        # 保存图像
-        cv2.imwrite(output_path, img)
-        print(f"标定点图像已保存到 {output_path}")
-        return img
-
-    def pixel_to_world_nine_points(self, pixel_x, pixel_y):
-        """
-        使用九点标定数据将像素坐标转换为世界坐标
+        使用RealSense SDK进行3D坐标转换
 
         Args:
             pixel_x: 像素x坐标
             pixel_y: 像素y坐标
+            depth_value: 深度值
+            intrinsics: RealSense相机内参
+            depth_scale: 深度比例因子
 
         Returns:
-            tuple: (world_x, world_y) 世界坐标
+            tuple: (world_x, world_y, world_z) 世界坐标
         """
-        # 这个方法需要从外部获取九点标定数据
-        # 由于这个类没有直接访问GUI中的九点标定数据，我们需要通过其他方式传递
-        raise NotImplementedError("需要从GUI传递九点标定数据")
+        if self.R_camera2base is None or self.T_camera2base is None:
+            raise ValueError("请先执行手眼标定")
+
+        # 使用标定好的内参矩阵self.K替代intrinsics
+        # 将像素坐标反投影到相机坐标系
+        fx = self.K[0, 0]
+        fy = self.K[1, 1]
+        cx = self.K[0, 2]
+        cy = self.K[1, 2]
+
+        # 将像素坐标和深度值转换为相机坐标系下的3D点
+        z = depth_value * depth_scale
+        x = (pixel_x - cx) * z / fx
+        y = (pixel_y - cy) * z / fy
+        # 使用RealSense SDK反投影像素到3D点
+        # point_3d = rs.rs2_deproject_pixel_to_point(
+        #     intrinsics,
+        #     [pixel_x, pixel_y],
+        #     depth_value * depth_scale
+        # )
+        # 相机坐标系下的3D点
+        camera_coords = np.array([x, y, z])
+
+        # 应用外参变换到世界坐标系
+        camera_coords_reshaped = camera_coords.reshape(3, 1)
+        world_coords = self.R_camera2base @ camera_coords_reshaped + self.T_camera2base
+
+        return world_coords[0, 0], world_coords[1, 0], world_coords[2, 0]
+
+
 class HandEyeCalibrationGUI:
     def __init__(self, root):
         self.root = root
@@ -354,6 +307,8 @@ class HandEyeCalibrationGUI:
         style.configure("Red.TButton", foreground="red")
 
         self.calibrator = HandEyeCalibration()
+        self.service = HandEyeCalibrationService(self.calibrator)
+
         self.current_image = None
         self.calibration_data = []
         self.image_files = []              # 新增
@@ -364,6 +319,10 @@ class HandEyeCalibrationGUI:
         # 机械臂控制器
         self.robot_controller = None
         self.robot_connected = False
+        # 相机控制相关属性
+        self.camera_manager = None
+        self.camera_connected = False
+
         # 像素坐标转世界坐标相关属性
         self.pixel_x_var = tk.StringVar(value="0")
         self.pixel_y_var = tk.StringVar(value="0")
@@ -371,14 +330,13 @@ class HandEyeCalibrationGUI:
         self.world_y_var = tk.StringVar(value="0.0")
 
         # 张正友标定点数据 (初始化为9个空点)
-        self.zhang_points_data = [{} for _ in range(9)]
         self.selected_point_index = 0
 
         self.setup_ui()
         # 初始化后更新界面显示
         self.update_camera_params_display()
         # 自动加载保存的标定点数据
-        self.load_zhang_points_from_json()
+        self.reload_camera_parameters()
 
     def setup_ui(self):
         """设置用户界面"""
@@ -467,10 +425,16 @@ class HandEyeCalibrationGUI:
         filename_frame = ttk.LabelFrame(control_frame, text="参数文件设置")
         filename_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(filename_frame, text="参数文件名:").grid(row=0, column=0, sticky=tk.W)
-        self.filename_var = tk.StringVar(value="camera_params.npz")
-        filename_entry = ttk.Entry(filename_frame, textvariable=self.filename_var, width=25)
-        filename_entry.grid(row=0, column=1, padx=5, sticky=tk.EW)
+        ttk.Label(filename_frame, text="保存目录:").grid(row=0, column=0, sticky=tk.W)
+        self.filename_var = tk.StringVar(value="RED_CAMERA")
+
+        # 修改为Combobox并绑定事件
+        self.filename_combo = ttk.Combobox(filename_frame, textvariable=self.filename_var, width=15, state="normal")
+        self.filename_combo.grid(row=0, column=1, padx=5, sticky=tk.EW)
+        self.filename_combo.bind('<FocusOut>', self.update_filename_options)  # 失去焦点时更新选项
+        self.filename_combo.bind('<Return>', self.update_filename_options)  # 回车时更新选项
+        self.update_filename_options()  # 初始化选项
+
         # 更新按钮，用于重新加载参数
         ttk.Button(filename_frame, text="重新加载", command=self.reload_camera_parameters).grid(row=0, column=2, padx=5)
 
@@ -496,14 +460,47 @@ class HandEyeCalibrationGUI:
         self.speed_display = ttk.Label(robot_frame, text="50%")
         self.speed_display.grid(row=1, column=2)
 
+        # 相机控制区域
+        camera_frame = ttk.LabelFrame(control_frame, text="相机控制")
+        camera_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(camera_frame, text="相机状态:").grid(row=0, column=0, sticky=tk.W)
+        self.camera_status_var = tk.StringVar(value="未连接")
+        self.camera_status_label = ttk.Label(camera_frame, textvariable=self.camera_status_var)
+        self.camera_status_label.grid(row=0, column=1, sticky=tk.W)
+
+        # 创建一个框架来容纳连接和拍照按钮
+        camera_button_frame = ttk.Frame(camera_frame)
+        camera_button_frame.grid(row=1, column=0, columnspan=2, pady=5, sticky=tk.EW)
+
+        self.connect_camera_button = ttk.Button(camera_button_frame, text="连接相机", command=self.toggle_camera_connection)
+        self.connect_camera_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+
+        self.capture_button = ttk.Button(camera_button_frame, text="拍照", command=self.capture_image, state=tk.DISABLED)
+        self.capture_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+
+        # 配置列权重使按钮能正确拉伸
+        camera_button_frame.columnconfigure(0, weight=1)
+        camera_button_frame.columnconfigure(1, weight=1)
+
+
         # 移动控制
         move_frame = ttk.LabelFrame(control_frame, text="移动控制")
         move_frame.pack(fill=tk.X, pady=5)
         suction_frame = ttk.LabelFrame(control_frame, text="吸放控制")
         suction_frame.pack(fill=tk.X, pady=5)
+        home_frame = ttk.LabelFrame(control_frame, text="回家点设置")
+        home_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(home_frame, text="回家点:").pack(side=tk.LEFT)
+        self.home_point_var = tk.StringVar(value="RED_CAMERA")
+        self.home_point_combo = ttk.Combobox(home_frame, textvariable=self.home_point_var,
+                                             values=["RED_CAMERA", "FRUIT_CAMERA"], state="readonly", width=15)
+        self.home_point_combo.pack(side=tk.LEFT, padx=5)
 
         ttk.Button(move_frame, text="移动到世界坐标", command=self.move_to_world_coordinate).pack(fill=tk.X, pady=2)
         ttk.Button(move_frame, text="回家", command=self.move_home).pack(fill=tk.X, pady=2)
+        ttk.Button(move_frame, text="清除报警", command=self.clear_robot_alarm).pack(fill=tk.X, pady=2)
+
         self.suction_button = ttk.Button(suction_frame, text="吸取", command=self.toggle_suction)
         self.suction_button.pack(fill=tk.X, padx=5, pady=5)
         # 相机内参设置
@@ -643,7 +640,8 @@ class HandEyeCalibrationGUI:
         ttk.Label(pixel_frame, text="转换方式:").grid(row=0, column=0, sticky=tk.W)
         self.conversion_method_var = tk.StringVar(value="matrix")
         conversion_method_combo = ttk.Combobox(pixel_frame, textvariable=self.conversion_method_var,
-                                              values=["matrix", "nine_points"], state="readonly", width=12)
+                                              values=["matrix", "nine_points", "3d_with_depth"],
+                                              state="readonly", width=12)
         conversion_method_combo.grid(row=0, column=1, columnspan=2, padx=5, sticky=tk.W)
         conversion_method_combo.set("matrix")  # 默认选择矩阵转换
 
@@ -760,19 +758,34 @@ class HandEyeCalibrationGUI:
         self.data_listbox = tk.Listbox(data_frame, height=8)
         self.data_listbox.pack(fill=tk.BOTH, expand=True)
 
+    def update_filename_options(self, event=None):
+        """更新文件名下拉选项"""
+        if os.path.exists(self.calibrator.filedir):
+            # 获取目录中所有文件夹
+            folders = [f for f in os.listdir(self.calibrator.filedir)
+                      if os.path.isdir(os.path.join(self.calibrator.filedir, f))]
+            # 设置下拉选项
+            self.filename_combo['values'] = folders
+            # 如果当前值不在选项中且不为空，则添加到选项中
+            current_value = self.filename_var.get()
+            if current_value and current_value not in folders:
+                folders.append(current_value)
+                self.filename_combo['values'] = folders
+
     def reload_camera_parameters(self):
         """重新加载相机参数"""
-        filename = self.filename_var.get()
-        if filename:
+        filepath = os.path.join(self.calibrator.filedir,self.filename_var.get(),'camera_params.npz')
+        if filepath:
             # 更新calibrator的文件名
-            self.calibrator.filename = os.path.join(dir, 'calibration', 'output', filename)
+            self.calibrator.filepath = filepath
             # 重新加载参数
+            self.load_zhang_points_from_json()
             if self.calibrator.load_camera_parameters():
                 # 更新界面显示
                 self.update_camera_params_display()
-                self.result_text.insert(tk.END, f"已重新加载参数文件: {filename}\n")
+                self.result_text.insert(tk.END, f"已重新加载参数文件: {filepath}\n")
             else:
-                self.result_text.insert(tk.END, f"加载参数文件失败: {filename}\n")
+                self.result_text.insert(tk.END, f"加载参数文件失败: {filepath}\n")
             self.result_text.see(tk.END)
 
     def toggle_control_panel(self):
@@ -844,6 +857,24 @@ class HandEyeCalibrationGUI:
         except Exception as e:
             self.robot_status_label.config(text="连接错误", foreground="red")
             self.result_text.insert(tk.END, f"连接机械臂时出错: {str(e)}\n")
+        self.result_text.see(tk.END)
+
+    def clear_robot_alarm(self):
+        """清除机械臂报警"""
+        if not self.robot_connected:
+            messagebox.showerror("错误", "请先连接机械臂")
+            return
+
+        try:
+            if self.robot_controller.clear_alarm():
+                self.result_text.insert(tk.END, "✅ 机械臂报警已清除\n")
+                messagebox.showinfo("提示", "机械臂报警已清除")
+            else:
+                self.result_text.insert(tk.END, "❌ 机械臂报警清除失败\n")
+                messagebox.showerror("错误", "机械臂报警清除失败")
+        except Exception as e:
+            self.result_text.insert(tk.END, f"❌ 清除报警时出错: {str(e)}\n")
+            messagebox.showerror("错误", f"清除报警时出错: {str(e)}")
         self.result_text.see(tk.END)
 
     def disconnect_robot(self):
@@ -981,7 +1012,6 @@ class HandEyeCalibrationGUI:
             messagebox.showerror("错误", f"移动机械臂时出错: {str(e)}")
         self.result_text.see(tk.END)
 
-    # 修改 move_home 方法，在移动前设置速度
     def move_home(self):
         """机械臂回家"""
         if not self.robot_connected:
@@ -993,11 +1023,18 @@ class HandEyeCalibrationGUI:
             speed = int(self.robot_speed.get())
             self.robot_controller.set_speed(speed / 100.0)
 
-            self.robot_controller.run_point_j(RED_CAMERA)
-            self.result_text.insert(tk.END, f"机械臂已回家 (速度: {speed}%)\n")
+            # 根据选择的回家点执行相应操作
+            home_point = self.home_point_var.get()
+            if home_point == "RED_CAMERA":
+                self.robot_controller.run_point_j(RED_CAMERA)
+            elif home_point == "FRUIT_CAMERA":
+                self.robot_controller.run_point_j(FRUIT_CAMERA)
+
+            self.result_text.insert(tk.END, f"机械臂已回家到 {home_point} (速度: {speed}%)\n")
         except Exception as e:
             messagebox.showerror("错误", f"机械臂回家时出错: {str(e)}")
         self.result_text.see(tk.END)
+
 
     def toggle_suction(self):
         """切换吸放状态"""
@@ -1137,110 +1174,50 @@ class HandEyeCalibrationGUI:
             messagebox.showerror("错误", "请先加载图像文件夹")
             return
 
-        # 缓存 calibrator 属性引用
-        calib = self.calibrator
-
-        # 更新棋盘格参数
         try:
-            calib.target_x_number = int(self.board_x_var.get())
-            calib.target_y_number = int(self.board_y_var.get())
-            calib.board_size = (calib.target_x_number, calib.target_y_number)
-        except ValueError:
-            messagebox.showerror("错误", "棋盘格参数必须是有效的数字")
-            return
+            # 更新棋盘格参数
+            target_x_number = int(self.board_x_var.get())
+            target_y_number = int(self.board_y_var.get())
+            self.service.update_chessboard_params(target_x_number, target_y_number)
 
-        # 准备标定数据
-        object_points = []  # 世界坐标系中的点
-        image_points = []   # 图像坐标系中的点
-
-        # 创建世界坐标系中的棋盘格角点坐标
-        total_points = calib.target_x_number * calib.target_y_number
-        objp = np.zeros((total_points, 3), np.float32)
-        objp[:, :2] = np.mgrid[0:calib.target_x_number, 0:calib.target_y_number].T.reshape(-1, 2)
-
-        successful_images = 0
-        self.result_text.insert(tk.END, "开始相机内参标定...\n")
-
-        gray_shape = None  # 初始化 gray_shape 防止未定义错误
-
-        # 遍历所有图像进行角点检测
-        for idx, image_path in enumerate(self.image_files):
-            img = cv2.imread(image_path)
-            if img is None:
-                self.result_text.insert(tk.END, f"图像 {idx+1}: 加载失败\n")
-                continue
-
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            if gray_shape is None:
-                gray_shape = gray.shape[::-1]
-
-            # 查找棋盘格角点
-            ret, corners = cv2.findChessboardCorners(gray, calib.board_size, None)
-
-            if ret:
-                # 精确检测角点位置
-                criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-                refined_corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-
-                if refined_corners is not None:
-                    corners = refined_corners
-
-                # 添加点到标定数据中
-                object_points.append(objp.copy())  # 使用 copy() 避免共享内存问题
-                image_points.append(corners)
-                successful_images += 1
-
-                self.result_text.insert(tk.END, f"图像 {idx+1}: 检测到角点\n")
-            else:
-                self.result_text.insert(tk.END, f"图像 {idx+1}: 未检测到角点\n")
-
-        self.result_text.see(tk.END)
-
-        if successful_images < 3:
-            messagebox.showerror("标定失败", f"成功检测角点的图像少于3张 ({successful_images} 张)，无法进行标定")
-            return
-
-        # 执行相机标定
-        try:
-            if gray_shape is None:
-                raise RuntimeError("未能从有效图像中提取尺寸信息")
-
-            ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(
-                object_points, image_points, gray_shape, None, None)
-
-            # 基本验证返回值有效性
-            if mtx is None or dist is None:
-                raise RuntimeError("OpenCV 标定返回无效结果")
-
-            # 保存标定结果
-            calib.K = mtx
-            calib.distortion = dist
+            # 执行标定
+            result = self.service.calibrate_intrinsic(self.image_files)
 
             # 更新UI中的相机参数显示
-            self.fx_var.set(f"{mtx[0, 0]:.3f}")
-            self.fy_var.set(f"{mtx[1, 1]:.3f}")
-            self.cx_var.set(f"{mtx[0, 2]:.3f}")
-            self.cy_var.set(f"{mtx[1, 2]:.3f}")
+            self.fx_var.set(f"{result['mtx'][0, 0]:.3f}")
+            self.fy_var.set(f"{result['mtx'][1, 1]:.3f}")
+            self.cx_var.set(f"{result['mtx'][0, 2]:.3f}")
+            self.cy_var.set(f"{result['mtx'][1, 2]:.3f}")
 
             # 显示标定结果
             self.result_text.insert(tk.END, "\n相机内参标定完成!\n")
-            self.result_text.insert(tk.END, f"使用了 {successful_images} 张图像进行标定\n")
-            self.result_text.insert(tk.END, f"重投影误差: {ret:.3f} pixels\n\n")
-            self.result_text.insert(tk.END, f"相机内参矩阵 K:\n{mtx}\n\n")
-            self.result_text.insert(tk.END, f"畸变系数:\n{dist}\n")
+            self.result_text.insert(tk.END, f"使用了 {result['successful_images']} 张图像进行标定\n")
+            self.result_text.insert(tk.END, f"重投影误差: {result['reprojection_error']:.3f} pixels\n\n")
+            self.result_text.insert(tk.END, f"相机内参矩阵 K:\n{result['mtx']}\n\n")
+            self.result_text.insert(tk.END, f"畸变系数:\n{result['dist']}\n")
+
+            # 显示处理详情
+            for idx, status in result['processed_images']:
+                self.result_text.insert(tk.END, f"图像 {idx}: {status}\n")
+
             self.result_text.see(tk.END)
 
-            calib.save_camera_parameters(os.path.join(dir, 'calibration', 'output', self.filename_var.get()))
+            filepath = os.path.join(self.calibrator.filedir,self.filename_var.get(),'camera_params.npz')
+            # 确保目录存在
+            directory = os.path.dirname(filepath)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory)
+            self.calibrator.save_camera_parameters(filepath)
 
-            messagebox.showinfo("标定完成", f"相机内参标定完成!\n重投影误差: {ret:.3f} pixels")
+            messagebox.showinfo("标定完成", f"相机内参标定完成!\n重投影误差: {result['reprojection_error']:.3f} pixels")
 
-        except (RuntimeError, cv2.error) as specific_error:
-            messagebox.showerror("标定失败", f"标定过程中出现错误: {str(specific_error)}")
-            self.result_text.insert(tk.END, f"标定失败: {str(specific_error)}\n")
+        except ValueError as e:
+            messagebox.showerror("标定失败", f"标定过程中出现错误: {str(e)}")
+            self.result_text.insert(tk.END, f"标定失败: {str(e)}\n")
             self.result_text.see(tk.END)
-        except Exception as general_error:
-            messagebox.showerror("未知错误", f"发生未预期错误: {str(general_error)}")
-            self.result_text.insert(tk.END, f"未知错误: {str(general_error)}\n")
+        except Exception as e:
+            messagebox.showerror("未知错误", f"发生未预期错误: {str(e)}")
+            self.result_text.insert(tk.END, f"未知错误: {str(e)}\n")
             self.result_text.see(tk.END)
 
     def update_camera_params_display(self):
@@ -1281,25 +1258,72 @@ class HandEyeCalibrationGUI:
 
             if conversion_method == "matrix":
                 # 使用矩阵转换方法
-                world_x, world_y = self.calibrator.pixel_to_world(pixel_x, pixel_y)
+                world_x, world_y = self.service.pixel_to_world_matrix(pixel_x, pixel_y)
+                self.world_x_var.set(f"{world_x:.3f}")
+                self.world_y_var.set(f"{world_y:.3f}")
+                self.result_text.insert(tk.END, f"像素坐标({pixel_x}, {pixel_y}) -> 世界坐标({world_x:.3f}, {world_y:.3f}) [{conversion_method}]\n")
+
             elif conversion_method == "nine_points":
                 # 使用九点标定转换方法
-                world_x, world_y = self.pixel_to_world_nine_points(pixel_x, pixel_y)
+                world_x, world_y = self.service.pixel_to_world_nine_points(pixel_x, pixel_y)
+                self.world_x_var.set(f"{world_x:.3f}")
+                self.world_y_var.set(f"{world_y:.3f}")
+                self.result_text.insert(tk.END, f"像素坐标({pixel_x}, {pixel_y}) -> 世界坐标({world_x:.3f}, {world_y:.3f}) [{conversion_method}]\n")
+
+            elif conversion_method == "3d_with_depth":
+                # 使用3D深度转换方法
+                self.convert_pixel_to_world_3d()
+
             else:
                 raise ValueError(f"未知的转换方式: {conversion_method}")
 
-            # 更新显示
-            self.world_x_var.set(f"{world_x:.3f}")
-            self.world_y_var.set(f"{world_y:.3f}")
-
-            self.result_text.insert(tk.END, f"像素坐标({pixel_x}, {pixel_y}) -> 世界坐标({world_x:.3f}, {world_y:.3f}) [{conversion_method}]\n")
             self.result_text.see(tk.END)
 
         except ValueError as e:
+            print(e)
             messagebox.showerror("错误", f"坐标转换失败: {str(e)}")
         except Exception as e:
             messagebox.showerror("错误", f"发生错误: {str(e)}")
+    def convert_pixel_to_world_3d(self):
+        """将像素坐标和深度转换为3D世界坐标"""
+        try:
+            pixel_x = float(self.pixel_x_var.get())
+            pixel_y = float(self.pixel_y_var.get())
 
+            if not self.camera_connected or not self.camera_manager:
+                messagebox.showerror("错误", "请先连接相机以获取深度信息")
+                return
+
+            # 从相机管理器获取帧和内参
+            color_frame, depth_frame = self.camera_manager.get_frame()
+            if depth_frame is not None:
+                # 获取深度值
+                depth_data = np.asanyarray(depth_frame.get_data())
+                depth_value = depth_data[int(pixel_y), int(pixel_x)]
+
+                # 获取相机内参和深度比例
+                depth_intrinsics = depth_frame.profile.as_video_stream_profile().intrinsics
+                # 使用 CameraManager 中保存的深度比例
+                depth_scale = self.camera_manager.depth_scale
+
+                # 使用RealSense SDK进行坐标转换
+                world_x, world_y, world_z = self.calibrator.pixel_to_world_3d_realsense(
+                    pixel_x, pixel_y, depth_value, depth_intrinsics, depth_scale
+                )
+
+                # 更新显示
+                self.world_x_var.set(f"{world_x:.3f}")
+                self.world_y_var.set(f"{world_y:.3f}")
+
+                self.result_text.insert(tk.END,
+                                        f"3D坐标转换(RealSense): 像素({pixel_x}, {pixel_y}) 深度{depth_value*depth_scale} -> "
+                                        f"世界坐标({world_x:.3f}, {world_y:.3f}, {world_z:.3f})\n")
+                self.result_text.see(tk.END)
+            else:
+                messagebox.showerror("错误", "无法获取深度信息")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"3D坐标转换失败: {str(e)}")
     def move_to_world_coordinate(self):
         """移动到指定的世界坐标"""
         if not self.robot_connected:
@@ -1343,27 +1367,25 @@ class HandEyeCalibrationGUI:
 
     def load_point_data(self, point_index):
         """加载指定标定点的数据显示"""
-        if 0 <= point_index < len(self.zhang_points_data):
-            point_data = self.zhang_points_data[point_index]
+        # 清空输入框
+        self.pixel_x_entry.delete(0, tk.END)
+        self.pixel_y_entry.delete(0, tk.END)
+        self.world_x_entry.delete(0, tk.END)
+        self.world_y_entry.delete(0, tk.END)
+
+        zhang_points_data = self.service.get_calibration_points()
+        if 0 <= point_index < len(zhang_points_data):
+            point_data = zhang_points_data[point_index]
 
             # 如果有点数据，加载到输入框
             if 'pixel_x' in point_data and 'pixel_y' in point_data:
-                self.pixel_x_entry.delete(0, tk.END)
                 self.pixel_x_entry.insert(0, str(point_data['pixel_x']))
-                self.pixel_y_entry.delete(0, tk.END)
                 self.pixel_y_entry.insert(0, str(point_data['pixel_y']))
 
             if 'world_x' in point_data and 'world_y' in point_data:
-                self.world_x_entry.delete(0, tk.END)
                 self.world_x_entry.insert(0, str(point_data['world_x']))
-                self.world_y_entry.delete(0, tk.END)
                 self.world_y_entry.insert(0, str(point_data['world_y']))
-        else:
-            # 清空输入框
-            self.pixel_x_entry.delete(0, tk.END)
-            self.pixel_y_entry.delete(0, tk.END)
-            self.world_x_entry.delete(0, tk.END)
-            self.world_y_entry.delete(0, tk.END)
+
 
     def detect_chessboard_corners(self):
         """检测当前图像的棋盘格角点（修改为检测九点标定中的九个点）"""
@@ -1372,55 +1394,23 @@ class HandEyeCalibrationGUI:
             return
 
         try:
-            # 在当前图像中查找角点
-            gray = cv2.cvtColor(self.current_image, cv2.COLOR_BGR2GRAY)
-            ret, corners = cv2.findChessboardCorners(
-                gray,
-                self.calibrator.board_size,
-                None
-            )
+            # 获取棋盘格尺寸
+            board_x = int(self.board_x_var.get())
+            board_y = int(self.board_y_var.get())
+            board_size = (board_x, board_y)
 
-            if not ret:
-                messagebox.showerror("错误", "当前图像未检测到棋盘格角点")
-                return
-
-            # 亚像素精化
-            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-            corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-
-            # 确保有9个点（3x3网格）
-            if len(corners) < 9:
-                messagebox.showerror("错误", "检测到的角点少于9个")
-                return
-
-            # 使用3x3网格的9个点
-            # 从棋盘格角点中选择9个点（按照3x3网格排列）
-            grid_points = []
-            board_w = self.calibrator.target_x_number
-            board_h = self.calibrator.target_y_number
-
-            # 选择3x3网格的角点索引
-            indices = []
-            for i in [0, board_h//2, board_h-1]:
-                for j in [0, board_w//2, board_w-1]:
-                    index = i * board_w + j
-                    indices.append(index)
-
-            # 提取9个点
-            for idx in indices:
-                if idx < len(corners):
-                    grid_points.append(corners[idx][0])
-
-            if len(grid_points) != 9:
-                messagebox.showerror("错误", "无法提取9个标定点")
-                return
+            # 检测角点
+            grid_points = self.service.detect_calibration_points(self.current_image, board_size)
 
             # 更新所有9个标定点的像素坐标
             for i, point in enumerate(grid_points):
-                # 更新所有9个点的像素坐标
-                if i < len(self.zhang_points_data):
-                    self.zhang_points_data[i]['pixel_x'] = round(point[0], 2)
-                    self.zhang_points_data[i]['pixel_y'] = round(point[1], 2)
+                self.service.update_calibration_point(
+                    i,
+                    round(point[0], 2),
+                    round(point[1], 2),
+                    None,
+                    None
+                )
 
             # 更新当前选中点的显示
             current_point_index = self.point_selector.current()
@@ -1452,80 +1442,39 @@ class HandEyeCalibrationGUI:
         except Exception as e:
             messagebox.showerror("错误", f"角点检测失败: {str(e)}")
 
-    def save_zhang_points_to_json(self, filename='calibration/output/zhang_points.json'):
+    def save_zhang_points_to_json(self):
         """
         保存张正友九点标定数据到JSON文件
-
-        Args:
-            filename: 保存的文件名
         """
         try:
-            # 确保目录存在
-            directory = os.path.dirname(filename)
-            if directory and not os.path.exists(directory):
-                os.makedirs(directory)
-
-            # 准备要保存的数据
-            data_to_save = []
-            for i, point_data in enumerate(self.zhang_points_data):
-                if point_data:  # 只保存非空的点数据
-                    point_entry = {
-                        'index': i,
-                        'pixel_x': point_data.get('pixel_x'),
-                        'pixel_y': point_data.get('pixel_y'),
-                        'world_x': point_data.get('world_x'),
-                        'world_y': point_data.get('world_y')
-                    }
-                    data_to_save.append(point_entry)
-
-            # 保存到文件
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(data_to_save, f, ensure_ascii=False, indent=4)
-
-            self.result_text.insert(tk.END, f"标定点数据已保存到 {filename}\n")
+            filepath = os.path.join(self.calibrator.filedir,self.filename_var.get(),'saved_points.json')
+            saved_path = self.service.save_points_to_json(filepath)
+            self.result_text.insert(tk.END, f"标定点数据已保存到 {saved_path}\n")
             self.result_text.see(tk.END)
 
         except Exception as e:
             messagebox.showerror("保存失败", f"保存标定点数据时出错: {str(e)}")
 
-    def load_zhang_points_from_json(self, filename='calibration/output/zhang_points.json'):
+    def load_zhang_points_from_json(self):
         """
         从JSON文件加载张正友九点标定数据
-
-        Args:
-            filename: 加载的文件名
         """
         try:
-            if not os.path.exists(filename):
-                self.result_text.insert(tk.END, f"未找到标定点数据文件 {filename}\n")
+            filepath = os.path.join(self.calibrator.filedir,self.filename_var.get(),'saved_points.json')
+
+            if self.service.load_points_from_json(filepath):
+                # 更新界面显示
+                self.update_points_listbox()
+                # 加载当前选中的点数据到输入框
+                self.load_point_data(self.point_selector.current())
+
+                self.result_text.insert(tk.END, f"标定点数据已从 {filepath} 加载\n")
+                self.result_text.see(tk.END)
+                return True
+            else:
+                self.result_text.insert(tk.END, f"未找到标定点数据文件 {filepath}\n")
                 self.result_text.see(tk.END)
                 return False
-
-            with open(filename, 'r', encoding='utf-8') as f:
-                loaded_data = json.load(f)
-
-            # 重置当前标定点数据
-            self.zhang_points_data = [{} for _ in range(9)]
-
-            # 加载数据
-            for point_entry in loaded_data:
-                index = point_entry.get('index', 0)
-                if 0 <= index < 9:  # 确保索引有效
-                    self.zhang_points_data[index] = {
-                        'pixel_x': point_entry.get('pixel_x'),
-                        'pixel_y': point_entry.get('pixel_y'),
-                        'world_x': point_entry.get('world_x'),
-                        'world_y': point_entry.get('world_y')
-                    }
-
-            # 更新界面显示
-            self.update_points_listbox()
-            # 加载当前选中的点数据到输入框
-            self.load_point_data(self.point_selector.current())
-
-            self.result_text.insert(tk.END, f"标定点数据已从 {filename} 加载\n")
-            self.result_text.see(tk.END)
-            return True
 
         except Exception as e:
             messagebox.showerror("加载失败", f"加载标定点数据时出错: {str(e)}")
@@ -1542,25 +1491,8 @@ class HandEyeCalibrationGUI:
             world_x = float(self.world_x_entry.get())
             world_y = float(self.world_y_entry.get())
 
-            # 如果该点已存在，更新数据；否则创建新点
-            if point_index < len(self.zhang_points_data):
-                self.zhang_points_data[point_index].update({
-                    'pixel_x': pixel_x,
-                    'pixel_y': pixel_y,
-                    'world_x': world_x,
-                    'world_y': world_y
-                })
-            else:
-                # 扩展列表到所需大小
-                while len(self.zhang_points_data) <= point_index:
-                    self.zhang_points_data.append({})
-
-                self.zhang_points_data[point_index] = {
-                    'pixel_x': pixel_x,
-                    'pixel_y': pixel_y,
-                    'world_x': world_x,
-                    'world_y': world_y
-                }
+            # 更新标定点
+            self.service.update_calibration_point(point_index, pixel_x, pixel_y, world_x, world_y)
 
             # 更新列表显示
             self.update_points_listbox()
@@ -1588,10 +1520,13 @@ class HandEyeCalibrationGUI:
     def delete_current_point(self):
         """删除当前标定点"""
         point_index = self.point_selector.current()
+        # 清空输入框
+        self.pixel_x_entry.delete(0, tk.END)
+        self.pixel_y_entry.delete(0, tk.END)
+        self.world_x_entry.delete(0, tk.END)
+        self.world_y_entry.delete(0, tk.END)
 
-        if 0 <= point_index < len(self.zhang_points_data):
-            self.zhang_points_data[point_index] = {}
-
+        if self.service.delete_calibration_point(point_index):
             # 更新显示
             self.load_point_data(point_index)
             self.update_points_listbox()
@@ -1602,8 +1537,9 @@ class HandEyeCalibrationGUI:
     def update_points_listbox(self):
         """更新标定点列表显示"""
         self.points_listbox.delete(0, tk.END)
+        zhang_points_data = self.service.get_calibration_points()
 
-        for i, point_data in enumerate(self.zhang_points_data):
+        for i, point_data in enumerate(zhang_points_data):
             if point_data and ('pixel_x' in point_data or 'world_x' in point_data):
                 px = point_data.get('pixel_x', 'N/A')
                 py = point_data.get('pixel_y', 'N/A')
@@ -1624,7 +1560,7 @@ class HandEyeCalibrationGUI:
 
     def clear_zhang_points(self):
         """清除所有张正友标定点"""
-        self.zhang_points_data = [{} for _ in range(9)]  # 保持9个空点
+        self.service.clear_all_calibration_points()
         self.points_listbox.delete(0, tk.END)
 
         # 重新填充空点
@@ -1640,48 +1576,32 @@ class HandEyeCalibrationGUI:
 
     def perform_extrinsic_calibration(self):
         """执行外参标定"""
-        # 过滤出有效标定点
-        valid_points = [point for point in self.zhang_points_data if point and
-                       'pixel_x' in point and 'world_x' in point]
-
-        if len(valid_points) < 3:
-            messagebox.showerror("错误", f"至少需要3个有效标定点，当前有{len(valid_points)}个")
-            return
-
         try:
-            # 准备标定数据
-            world_points_list = []
-            pixel_points_list = []
-
-            for point_data in valid_points:
-                # 创建单个点的像素坐标数组
-                pixel_point = np.array([[point_data['pixel_x'], point_data['pixel_y']]], dtype=np.float32)
-                pixel_points_list.append(pixel_point)
-
-                # 创建单个点的世界坐标数组 (Z=0)
-                world_point = np.array([[point_data['world_x'], point_data['world_y'], 0]], dtype=np.float32)
-                world_points_list.append(world_point)
-
             # 执行外参标定
-            R, T = self.calibrator.calculate_extrinsics_zhang(world_points_list, pixel_points_list)
-
-            # 保存外参
-            self.calibrator.R_camera2base = R
-            self.calibrator.T_camera2base = T
+            result = self.service.calibrate_extrinsic()
 
             # 更新界面显示
             self.update_camera_params_display()
 
             self.result_text.insert(tk.END, "外参标定完成!\n")
-            self.result_text.insert(tk.END, f"旋转矩阵 R:\n{R}\n")
-            self.result_text.insert(tk.END, f"平移向量 T:\n{T}\n")
+            self.result_text.insert(tk.END, f"旋转矩阵 R:\n{result['rotation_matrix']}\n")
+            self.result_text.insert(tk.END, f"平移向量 T:\n{result['translation_vector']}\n")
             self.result_text.see(tk.END)
 
             # 保存外参到文件
-            self.calibrator.save_camera_parameters(os.path.join(dir, 'calibration', 'output', self.filename_var.get()))
+            filepath = os.path.join(self.calibrator.filedir,self.filename_var.get(),'camera_params.npz')
+            # 确保目录存在
+            directory = os.path.dirname(filepath)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory)
+            self.calibrator.save_camera_parameters(filepath)
 
             messagebox.showinfo("标定完成", "外参标定已完成!")
 
+        except ValueError as e:
+            messagebox.showerror("错误", f"外参标定失败: {str(e)}")
+            self.result_text.insert(tk.END, f"外参标定失败: {str(e)}\n")
+            self.result_text.see(tk.END)
         except Exception as e:
             messagebox.showerror("标定失败", f"外参标定失败: {str(e)}")
             self.result_text.insert(tk.END, f"外参标定失败: {str(e)}\n")
@@ -1748,12 +1668,12 @@ class HandEyeCalibrationGUI:
             self.result_text.see(tk.END)
 
             # 保存图像到文件
-            output_path = 'calibration/output/nine_point_calibration.png'
-            directory = os.path.dirname(output_path)
+            filepath = os.path.join(self.calibrator.filedir,self.filename_var.get(),'nine_point_calibration.png')
+            directory = os.path.dirname(filepath)
             if directory and not os.path.exists(directory):
                 os.makedirs(directory)
-            cv2.imwrite(output_path, img)
-            self.result_text.insert(tk.END, f"九点标定图像已保存到 {output_path}\n")
+            cv2.imwrite(filepath, img)
+            self.result_text.insert(tk.END, f"九点标定图像已保存到 {filepath}\n")
 
         except Exception as e:
             messagebox.showerror("错误", f"生成九点标定图像失败: {str(e)}")
@@ -1769,40 +1689,127 @@ class HandEyeCalibrationGUI:
         Returns:
             tuple: (world_x, world_y) 世界坐标
         """
-        # 收集有效的九点标定数据
-        valid_points = [point for point in self.zhang_points_data
-                        if point and 'pixel_x' in point and 'world_x' in point]
+        return self.service.pixel_to_world_nine_points(pixel_x, pixel_y)
 
-        if len(valid_points) < 4:
-            raise ValueError(f"至少需要4个有效标定点进行插值，当前只有{len(valid_points)}个")
 
-        # 提取像素坐标和世界坐标
-        pixel_coords = np.array([[point['pixel_x'], point['pixel_y']] for point in valid_points])
-        world_coords = np.array([[point['world_x'], point['world_y']] for point in valid_points])
+    def toggle_camera_connection(self):
+        """切换相机连接状态"""
+        if self.camera_connected:
+            self.disconnect_camera()
+        else:
+            self.connect_camera()
 
-        # 使用scipy的griddata进行插值
+    def connect_camera(self):
+        """连接RealSense相机"""
         try:
-            from scipy.interpolate import griddata
-            world_x, world_y = griddata(
-                pixel_coords,
-                world_coords,
-                (pixel_x, pixel_y),
-                method='linear'
-            )
-            return world_x, world_y
-        except Exception as e:
-            # 如果线性插值失败，尝试使用最近邻插值
-            try:
-                world_x, world_y = griddata(
-                    pixel_coords,
-                    world_coords,
-                    (pixel_x, pixel_y),
-                    method='nearest'
-                )
-                return world_x, world_y
-            except Exception:
-                raise RuntimeError(f"无法使用九点标定数据进行坐标转换: {str(e)}")
+            from manager.camera_manager import CameraManager
+            self.camera_manager = CameraManager()
 
+            if self.camera_manager.initialize_camera():
+                self.camera_connected = True
+                self.connect_camera_button.config(text="断开相机", style="Red.TButton")  # 添加红色样式
+                self.camera_status_var.set("已连接")
+                self.capture_button.config(state=tk.NORMAL)
+                self.result_text.insert(tk.END, "相机连接成功\n")
+            else:
+                self.result_text.insert(tk.END, "相机连接失败\n")
+
+        except Exception as e:
+            self.result_text.insert(tk.END, f"连接相机时出错: {str(e)}\n")
+        self.result_text.see(tk.END)
+
+    def disconnect_camera(self):
+        """断开相机连接"""
+        try:
+            if self.camera_manager:
+                self.camera_manager.release_camera()
+                self.camera_manager = None
+
+            self.camera_connected = False
+            self.connect_camera_button.config(text="连接相机", style="")  # 恢复默认样式
+            self.camera_status_var.set("未连接")
+            self.capture_button.config(state=tk.DISABLED)
+            self.result_text.insert(tk.END, "相机已断开连接\n")
+
+        except Exception as e:
+            self.result_text.insert(tk.END, f"断开相机连接时出错: {str(e)}\n")
+        self.result_text.see(tk.END)
+
+    def capture_image(self):
+        """拍照并显示"""
+        if not self.camera_connected or not self.camera_manager:
+            messagebox.showerror("错误", "请先连接相机")
+            return
+
+        try:
+            # 捕获图像
+            image, depth_frame = self.camera_manager.get_frame()
+
+            if image is not None:
+                # 如果需要处理深度数据，也需要转换
+                if depth_frame is not None:
+                    depth_data = np.asanyarray(depth_frame.get_data())
+                    # 现在可以安全地使用 depth_data[y, x] 访问深度值
+
+                # 保存图像到指定路径
+                images_dir = os.path.join(dir, "calibration/images")
+                if not os.path.exists(images_dir):
+                    os.makedirs(images_dir)
+
+                # 生成唯一文件名
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"capture_{timestamp}.jpg"
+                filepath = os.path.join(images_dir, filename)
+
+                # 保存图像
+                cv2.imwrite(filepath, image)
+
+                # 加载并显示图像
+                self.current_image = image
+                self.image_files.append(filepath)
+                self.current_image_index = len(self.image_files) - 1
+
+                self.display_image(image)
+                self.image_count_label.config(text=f"{len(self.image_files)}/{len(self.image_files)}")
+                self.result_text.insert(tk.END, f"拍照成功，图像已保存到: {filepath}\n")
+            else:
+                self.result_text.insert(tk.END, "拍照失败，未能获取图像\n")
+
+        except Exception as e:
+            self.result_text.insert(tk.END, f"拍照时出错: {str(e)}\n")
+        self.result_text.see(tk.END)
+
+
+    def __del__(self):
+        """析构函数，确保释放资源"""
+        if self.camera_connected:
+            self.disconnect_camera()
+
+
+def calculate_height_compensation(top_pixel, top_depth, bottom_depth=0.415, center_pixel=(640, 360)):
+    """
+    根据深度差异与透视关系，将顶部像素坐标转换为对应底部像素坐标
+
+    参数:
+        top_pixel (tuple): 顶部像素坐标 (x, y)
+        top_depth (float): 顶部深度值
+        bottom_depth (float): 目标底部深度值
+        center_pixel (tuple): 图像中心像素坐标，默认(600, 350)
+
+    返回:
+        tuple: 对应的底部像素坐标 (x, y)
+    """
+    x_top, y_top = top_pixel
+    cx, cy = center_pixel
+
+    # 深度比例因子
+    depth_ratio = top_depth / bottom_depth
+
+    # 基于相似三角形的缩放
+    dx = (x_top - cx) * depth_ratio + cx
+    dy = (y_top - cy) * depth_ratio + cy
+
+    return (dx, dy)
 def pixel_to_world_coordinates(pixel_x, pixel_y,camera_type='RED_CAMERA'):
     """
     将像素坐标转换为世界坐标
@@ -1814,12 +1821,10 @@ def pixel_to_world_coordinates(pixel_x, pixel_y,camera_type='RED_CAMERA'):
     Returns:
         tuple: (world_x, world_y) 世界坐标
     """
-    if camera_type=='RED_CAMERA':
-        npz_path='camera_params_r.npz'
-    elif camera_type=='BLUE_CAMERA':
-        npz_path='camera_params_b.npz'
+    filedir = os.path.join(dir, 'calibration', 'output')
+    filepath = os.path.join(filedir, camera_type, 'camera_params.npz')
 
-    calibrator = HandEyeCalibration(npz_path)
+    calibrator = HandEyeCalibration(camera_type)
 
     # 步骤1: 去除畸变
     # 构造像素点数组
@@ -1838,7 +1843,6 @@ def pixel_to_world_coordinates(pixel_x, pixel_y,camera_type='RED_CAMERA'):
     undistorted_x, undistorted_y = undistorted_points[0][0]
 
     # 步骤2: 使用外参将去畸变后的像素坐标转换为世界坐标
-    # 这里复用HandEyeCalibration类中的pixel_to_world方法
     world_x, world_y = calibrator.pixel_to_world(undistorted_x, undistorted_y)
 
     return round(world_x,2), round(world_y,2)

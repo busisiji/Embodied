@@ -33,7 +33,7 @@ class CameraManager:
         self.show_camera = True
         self.window_name = "camera"
 
-    def initialize_camera(self) -> bool:
+    def initialize_camera(self):
         """
         初始化 RealSense D435i 相机
 
@@ -51,7 +51,14 @@ class CameraManager:
 
             # 启动相机
             profile = self.pipeline.start(self.config)
+            self.pipeline_profile = profile  # 保存 pipeline_profile
             self.running = True
+
+            # 创建对齐对象（将深度图对齐到彩色图）
+            self.align_to_color = rs.align(rs.stream.color)
+
+            # 获取深度传感器的深度比例
+            self.depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
 
             print("✅ 相机初始化成功")
             return True
@@ -60,6 +67,7 @@ class CameraManager:
             print(f"⚠️ 相机初始化失败: {e}")
             self.running = False
             return False
+
 
     def setup_camera_windows(self):
         """
@@ -127,7 +135,7 @@ class CameraManager:
 
     def capture_stable_image(self, num_frames=5, max_retries=3) -> Tuple[Optional[np.ndarray], Optional[rs.depth_frame]]:
         """
-        捕获稳定的图像和深度信息（通过多帧平均减少噪声）
+        捕获稳定的图像和深度信息（通过多帧平均减少噪声，并对齐深度图到彩色图）
 
         Args:
             num_frames: captured帧数用于平均
@@ -157,8 +165,12 @@ class CameraManager:
                 # 捕获多帧图像
                 for i in range(num_frames):
                     frames = self.pipeline.wait_for_frames(timeout_ms=5000)  # 设置超时时间
-                    color_frame = frames.get_color_frame()
-                    depth_frame = frames.get_depth_frame()
+
+                    # 对齐深度图到彩色图
+                    aligned_frames = self.align_to_color.process(frames)
+
+                    color_frame = aligned_frames.get_color_frame()
+                    depth_frame = aligned_frames.get_depth_frame()
 
                     if color_frame and depth_frame:
                         frame = np.asanyarray(color_frame.get_data())

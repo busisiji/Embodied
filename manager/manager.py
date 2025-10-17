@@ -52,36 +52,38 @@ class SystemManager():
 
         self._initialized = True
 
-    def initialize(self):
+
+    def initialize(self,no_init=[]):
         """初始化所有核心组件"""
         try:
-            # 初始化机械臂
-            self.initialize_dobot()
+            if 'dobot' not in no_init:
+                # 初始化机械臂
+                self.initialize_dobot()
         except Exception as e:
             print(f"初始化机械臂时出错: {e}")
 
         try:
-            # 初始化TTS管理器
-            self.tts_manager = TTSManager()
+            if 'tts' not in no_init:
+                # 初始化TTS管理器
+                self.tts_manager = TTSManager()
         except Exception as e:
             print(f"初始化TTS管理器时出错: {e}")
 
         try:
-            # 初始化语音识别器
-            self.speech_recognizer = SpeechManager(self)
-            self.speech_recognizer.start_listening(self._speech_callback)
+            if 'speech' not in no_init:
+                # 初始化语音识别器
+                self.speech_recognizer = SpeechManager(self)
+                self.speech_recognizer.start_listening(self._speech_callback)
         except Exception as e:
             print(f"初始化语音识别器时出错: {e}")
 
         try:
-            # 初始化相机管理器
-            self.camera_manager = CameraManager()
-            # 启动相机
-            if not self.camera_manager.initialize_camera():
-                print("⚠️ 相机启动失败")
-            # else:
-            #     self.camera_manager.setup_camera_windows()
-            #     print("✅ 相机已启动")
+            if 'camera' not in no_init:
+                # 初始化相机管理器
+                self.camera_manager = CameraManager()
+                # 启动相机
+                if not self.camera_manager.initialize_camera():
+                    print("⚠️ 相机启动失败")
         except Exception as e:
             print(f"初始化相机管理器时出错: {e}")
 

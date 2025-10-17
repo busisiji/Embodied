@@ -105,11 +105,11 @@ names: {list(self.classes.keys())}
             model = YOLO(self.model_path)
 
         # 执行验证
-        print(" 正在验证模型...")
+        print("正在验证模型...")
         metrics = model.val(data=data_yaml, device=device)
 
         # 输出验证结果
-        print(" 验证结果:")
+        print("验证结果:")
         print(f"  mAP50: {metrics.box.map50:.4f}")
         print(f"  mAP50-95: {metrics.box.map:.4f}")
 
@@ -132,7 +132,7 @@ names: {list(self.classes.keys())}
         model = YOLO(model_path)
 
         # 执行预测
-        print(f" 正在对 {source} 进行预测...")
+        print(f"正在对 {source} 进行预测...")
         results = model.predict(
             source=source,
             conf=conf,
@@ -317,7 +317,8 @@ def main():
                         help='训练设备 (e.g., "0" for GPU 0, "cpu" for CPU)')
     parser.add_argument('--task', type=str, choices=['train', 'val', 'predict'],
                         default='predict', help='任务类型')
-    parser.add_argument('--source', type=str,default='/home/jetson/code/V10.10/Embodied/runner/calibration/images/RS_20251014_105504.jpg', help='预测时的输入源路径')
+
+    parser.add_argument('--source', type=str,default=os.path.join(current_dir ,'../../runner/calibration/images/RS_20251015_170801.jpg'), help='预测时的输入源路径')
     args = parser.parse_args()
 
     # 创建训练器实例
@@ -353,7 +354,7 @@ def main():
         # 执行预测
         trainer.predict(
             source=args.source,
-            conf=0.25,
+            conf=0.7,
             iou=0.45,
             save=True
         )

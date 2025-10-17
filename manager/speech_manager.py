@@ -35,8 +35,8 @@ class SpeechManager():
             callback: 识别到关键词后的回调函数
             model_path: 离线模型路径
         """
-        self.parent = parent
-        if self.parent:
+        self.system_manager = parent
+        if self.system_manager:
             self.tts_manager = parent.tts_manager
         else:
             self.tts_manager = None
@@ -71,9 +71,8 @@ class SpeechManager():
         vocab_words = suggest_vocabulary_for_chess()
 
         # 初始化识别器
-        if self.keywords:
-            self.recognizer = KaldiRecognizer(self.model, self.sample_rate, json.dumps(vocab_words, ensure_ascii=False))
-            self.recognizer.SetWords(True)
+        self.recognizer = KaldiRecognizer(self.model, self.sample_rate, json.dumps(vocab_words, ensure_ascii=False))
+        self.recognizer.SetWords(True)
 
 
         print("✅ 语音识别器初始化完成")
@@ -177,8 +176,7 @@ class SpeechManager():
         if not is_wait or (self.is_awake and (time.time() - self.last_wake_time) > self.wake_timeout):
             self.is_awake = False
             print("唤醒状态已超时，进入休眠模式")
-            if self.tts_manager:
-                asyncio.run(self.tts_manager.speak_async("我睡了"))
+            asyncio.run(self.system_manager.speak_async("我睡了"))
 
     def process_text(self, text: str):
         """
@@ -258,7 +256,7 @@ class SpeechManager():
         try:
             print(f"系统被唤醒: {wake_word}")
             if self.tts_manager:
-                asyncio.run(self.tts_manager.speak_async("我在"))
+                asyncio.run(self.system_manager.speak_async("我在"))
         except Exception as e:
             print(f"异步唤醒回调执行错误: {e}")
 

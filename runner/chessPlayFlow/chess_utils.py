@@ -7,7 +7,7 @@ import numpy as np
 from parameters import WORLD_POINTS_R, WORLD_POINTS_RCV, WORLD_POINTS_B, CHESS_POINTS_R, CHESS_POINTS_RCV_H, \
     CHESS_POINTS_B, CHESS_POINTS_RCV_L, RCV_CAMERA, POINT_DOWN, POINT_RCV_DOWN, RED_CAMERA, BLACK_CAMERA, PIECE_SIZE, \
     IO_QI, RCV_H_LAY, R_RO_B
-from runner.runner_hand_eye import pixel_to_world_coordinates
+from runner.handeye_runner import pixel_to_world_coordinates
 from src.cchessAI import cchess
 from src.cchessAI.game import uci_to_coordinates, get_best_move_with_computer_play, execute_computer_move
 from utils.tools import move_id2move_action

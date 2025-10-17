@@ -1,5 +1,3 @@
-# 修改后的 calibrateCamera_runner.py
-
 import tkinter as tk
 from tkinter import messagebox
 import pyrealsense2 as rs
@@ -9,22 +7,27 @@ import os
 from datetime import datetime
 from PIL import Image, ImageTk
 
+from src.cchessYolo.fruit_yolo_obb_trainer import FruitOBBTrainer
 from utils.calibrationManager import pixel_to_world, calculate_perspective_transform_matrices, multi_camera_pixel_to_world
 from utils.corrected import correct_chessboard_to_square
 from parameters import CHESS_POINTS_R, WORLD_POINTS_R
 from src.cchessYolo.chess_detection_trainer import ChessPieceDetectorSeparate
 from src.cchessYolo.detect_chess_box import select_corner_circles, order_points, calculate_box_corners
+from manager.camera_manager import CameraManager
+
 dir = os.path.dirname(os.path.abspath(__file__))
+
 # ================== 配置参数 ==================
 SQUARE_SIZE_MM = 12.5         # 棋盘格大小（单位：毫米）
-CHESSBOARD_SHAPE = (7, 7)      # 内部角点数量（对应 4x4 棋盘格）
-MAX_IMAGES = 100                # 最大采集图像数量
+CHESSBOARD_SHAPE = (7, 7)     # 内部角点数量（对应 4x4 棋盘格）
+MAX_IMAGES = 100              # 最大采集图像数量
 AUTO_CAPTURE_INTERVAL = 100   # 自动拍照间隔（毫秒）默认 10s
 SAVE_DIR = os.path.join(dir, "calibration/images")
 OUTPUT_DIR = os.path.join(dir, "calibration/output")
 WIDTH = 1280
 HEIGHT = 720
 FPS = 6
+
 
 class CalibrationApp:
     def __init__(self, root):
@@ -33,9 +36,8 @@ class CalibrationApp:
 
         self.result_dir = "validation_results"
 
-        # 初始化相机管道
-        self.pipeline = None
-        self.config = None
+        # 初始化相机管理器
+        self.camera_manager = CameraManager(WIDTH, HEIGHT, FPS)
         self.running = True
 
         # 存储数据
@@ -51,10 +53,10 @@ class CalibrationApp:
         self.M = None
         self.chess_box_points = None
 
-        self.detector = ChessPieceDetectorSeparate(os.path.join(dir,'../src/cchessYolo/fruitYolo/runs/obb/fruit_obb_detection4/weights/best.pt')
-        )
+
 
     def init(self):
+        """初始化应用"""
         # 创建 UI
         self.create_ui()
 
@@ -72,10 +74,11 @@ class CalibrationApp:
         self.frame = tk.Frame(self.root)
         self.frame.pack(padx=10, pady=10)
 
-        self.label = tk.Label(self.frame, text=" 实时预览")
+        self.label = tk.Label(self.frame, text="实时预览")
         self.label.pack()
 
-        self.canvas = tk.Canvas(self.frame, width=WIDTH if WIDTH <= 1280 else 1280, height=HEIGHT if HEIGHT <= 720 else 720)
+        self.canvas = tk.Canvas(self.frame, width=WIDTH if WIDTH <= 1280 else 1280,
+                               height=HEIGHT if HEIGHT <= 720 else 720)
         self.canvas.pack()
 
         self.canvas.bind("<Motion>", self.on_mouse_move)
@@ -86,41 +89,36 @@ class CalibrationApp:
         self.coord_frame = tk.Frame(self.frame)
         self.coord_frame.pack(pady=5)
 
-        self.coord_label = tk.Label(self.coord_frame, text="️ 鼠标坐标: (0, 0)", fg="black")
+        self.coord_label = tk.Label(self.coord_frame, text="鼠标坐标: (0, 0)", fg="black")
         self.coord_label.pack(side=tk.RIGHT, padx=5)
 
-        self.world_coord_label = tk.Label(self.coord_frame, text=" 世界坐标: 未标定", fg="red")
+        self.world_coord_label = tk.Label(self.coord_frame, text="世界坐标: 未标定", fg="red")
         self.world_coord_label.pack(side=tk.RIGHT, padx=5)
 
         self.btn_frame = tk.Frame(self.frame)
         self.btn_frame.pack(pady=10)
 
-        self.manual_button = tk.Button(self.btn_frame, text=" 拍照", command=self.toggle_manual_mode)
-        self.manual_button.pack(side=tk.LEFT, padx=5)
+        # 创建按钮
+        buttons = [
+            ("拍照", self.toggle_manual_mode),
+            ("⏱️ 自动拍照", self.toggle_auto_mode),
+            ("实时矫正", self.toggle_correction),
+            ("识别收棋盒", self.detect_chess_box),
+            ("识别正方形", self.detect_squares),
+            ("识别棋子", self.detect_chess_pieces),
+            ("识别水果", self.detect_fruits),
+            ("手眼标定", self.hand_eye_calibration),
+            ("退出", self.stop_app)
+        ]
 
-        self.auto_button = tk.Button(self.btn_frame, text="⏱️ 自动拍照", command=self.toggle_auto_mode)
-        self.auto_button.pack(side=tk.LEFT, padx=5)
-
-
-        # self.calibrate_button = tk.Button(self.btn_frame, text=" 畸变矫正", command=self.apply_perspective_correction)
-        # self.calibrate_button.pack(side=tk.LEFT, padx=5)
-
-        # 新增按钮，控制是否实时应用矫正
-        self.correct_toggle_button = tk.Button(self.btn_frame, text=" 实时矫正", command=self.toggle_correction)
-        self.correct_toggle_button.pack(side=tk.LEFT, padx=5)
-
-        self.detect_chess_box_button = tk.Button(self.btn_frame, text=" 识别收棋盒", command=self.detect_chess_box)
-        self.detect_chess_box_button.pack(side=tk.LEFT, padx=5)
-
-        # 新增识别棋子按钮
-        self.detect_chess_button = tk.Button(self.btn_frame, text=" 识别棋子", command=self.detect_chess_pieces)
-        self.detect_chess_button.pack(side=tk.LEFT, padx=5)
+        for i, (text, command) in enumerate(buttons):
+            btn = tk.Button(self.btn_frame, text=text, command=command)
+            btn.pack(side=tk.LEFT, padx=5)
 
         self.squares_label = tk.Label(self.frame, text="未识别到棋格...", fg="red")
         self.squares_label.pack()
 
-        self.hand_eye_calibration_button = tk.Button(self.btn_frame, text=" 手眼标定", command=self.hand_eye_calibration)
-        self.hand_eye_calibration_button.pack(side=tk.LEFT, padx=5)
+        self.hand_eye_calibration_button = tk.Button(self.btn_frame, text="手眼标定", command=self.hand_eye_calibration)
 
         self.toggle_label = tk.Label(self.frame, text="实时矫正 已禁用", fg="blue")
         self.toggle_label.pack()
@@ -128,20 +126,11 @@ class CalibrationApp:
         self.status_label = tk.Label(self.frame, text="状态：等待开始...", fg="blue")
         self.status_label.pack()
 
-        self.quit_button = tk.Button(self.btn_frame, text=" 退出", command=self.stop_app)
-        self.quit_button.pack(side=tk.LEFT, padx=5)
-
     def init_camera(self):
         """初始化深度相机"""
-        self.pipeline = rs.pipeline()
-        self.config = rs.config()
-
-        # 启用彩色流
-        self.config.enable_stream(rs.stream.color, WIDTH, HEIGHT, rs.format.bgr8, FPS)
-        # 启用深度流
-        self.config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, FPS)
-
-        profile = self.pipeline.start(self.config)
+        if not self.camera_manager.initialize_camera():
+            messagebox.showerror("错误", "相机初始化失败")
+            self.running = False
 
     def save_image(self):
         """触发保存原始帧"""
@@ -150,18 +139,17 @@ class CalibrationApp:
         if self.captured >= MAX_IMAGES:
             messagebox.showinfo("提示", f"已达到最大拍摄数量 {MAX_IMAGES} 张。")
             self.auto_capturing = False
-            self.manual_button.config(state=tk.NORMAL)
             return
 
         # 检查是否只保存有棋盘格的图像
         gray = cv2.cvtColor(self.original_frame, cv2.COLOR_BGR2GRAY)
         ret, corners = cv2.findChessboardCorners(gray, CHESSBOARD_SHAPE, None)
 
-            # 创建目录
+        # 创建目录
         if not os.path.exists(SAVE_DIR):
             os.makedirs(SAVE_DIR)
 
-            # 生成文件名并保存图像
+        # 生成文件名并保存图像
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = os.path.join(SAVE_DIR, f"RS_{timestamp}.jpg")
         cv2.imwrite(filename, self.original_frame)
@@ -172,19 +160,16 @@ class CalibrationApp:
         """切换到手动模式"""
         if self.auto_capturing:
             self.auto_capturing = False
-            self.manual_button.config(state=tk.NORMAL)
         self.save_image()
 
     def toggle_auto_mode(self):
         """切换到自动模式"""
         if not self.auto_capturing:
             self.auto_capturing = True
-            self.manual_button.config(state=tk.DISABLED)
             self.countdown = AUTO_CAPTURE_INTERVAL
             self.status_label.config(text=f"状态：已切换到自动拍照模式（{AUTO_CAPTURE_INTERVAL // 1000}s/张）", fg="green")
         else:
             self.auto_capturing = False
-            self.manual_button.config(state=tk.NORMAL)
             self.status_label.config(text="状态：已切换到手动拍照模式", fg="green")
 
     def hand_eye_calibration(self):
@@ -233,19 +218,152 @@ class CalibrationApp:
             x, y = corner.astype(int)
             print(f"点 {i+1}: ({x}, {y})")
 
+    def detect_squares(self):
+        """检测图像中的正方形并输出四角和中心坐标，并在画面中绘制"""
+        if not hasattr(self, 'current_frame'):
+            self.status_label.config(text="⚠️ 未获取到图像数据", fg="red")
+            return
+
+        # 复制当前帧用于处理
+        img = self.current_frame.copy()
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # 预处理：高斯模糊和边缘检测
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edged = cv2.Canny(blurred, 50, 150)
+
+        # 查找轮廓
+        contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        squares = []
+
+        # 遍历所有轮廓，筛选正方形
+        for contour in contours:
+            # 计算轮廓面积，过滤太小的轮廓
+            area = cv2.contourArea(contour)
+            if area < 1000:  # 可根据需要调整最小面积
+                continue
+
+            # 近似轮廓为多边形
+            epsilon = 0.02 * cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+
+            # 如果多边形有4个顶点，可能是正方形
+            if len(approx) == 4:
+                # 检查是否为凸四边形
+                if cv2.isContourConvex(approx):
+                    # 计算边长
+                    sides = []
+                    points = approx.reshape(4, 2)
+                    for i in range(4):
+                        p1 = points[i]
+                        p2 = points[(i + 1) % 4]
+                        length = np.linalg.norm(p1 - p2)
+                        sides.append(length)
+
+                    # 检查四条边是否近似相等（正方形特性）
+                    avg_side = np.mean(sides)
+                    side_var = np.var(sides)
+
+                    # 如果边长差异较小，则认为是正方形
+                    if side_var < (avg_side * 0.3) ** 2:  # 允许30%的边长差异
+                        squares.append(approx)
+
+        # 保存检测到的正方形以便在update_frame中绘制
+        self.detected_squares = squares
+
+        # 输出坐标信息到控制台
+        if len(squares) > 0:
+            print(f"\n检测到 {len(squares)} 个正方形:")
+
+            for i, square in enumerate(squares):
+                points = square.reshape(4, 2)
+
+                # 按照顺序排列四个角点（左上，右上，右下，左下）
+                ordered_points = self.order_square_points(points)
+
+                # 计算中心点
+                center = np.mean(ordered_points, axis=0).astype(int)
+
+                # 输出坐标信息
+                print(f"正方形 {i + 1}:")
+                corner_names = ["左上", "右上", "右下", "左下"]
+                for j, (name, point) in enumerate(zip(corner_names, ordered_points)):
+                    print(f"  {name}角点: ({int(point[0])}, {int(point[1])})")
+                print(f"  中心点: ({int(center[0])}, {int(center[1])})")
+                print()
+
+            self.status_label.config(text=f"✅ 检测完成 - 找到 {len(squares)} 个正方形", fg="green")
+        else:
+            self.status_label.config(text="❌ 未检测到正方形", fg="red")
+
+    def order_square_points(self, points):
+        """
+        按照顺序排列正方形的四个角点：左上，右上，右下，左下
+        """
+        # 计算中心点
+        center = np.mean(points, axis=0)
+
+        # 根据相对于中心点的位置对点进行排序
+        top_points = []
+        bottom_points = []
+
+        for point in points:
+            if point[1] < center[1]:
+                top_points.append(point)
+            else:
+                bottom_points.append(point)
+
+        # 对顶部和底部点分别按x坐标排序
+        top_left = min(top_points, key=lambda p: p[0])
+        top_right = max(top_points, key=lambda p: p[0])
+        bottom_right = max(bottom_points, key=lambda p: p[0])
+        bottom_left = min(bottom_points, key=lambda p: p[0])
+
+        return np.array([top_left, top_right, bottom_right, bottom_left])
+
     def detect_chess_pieces(self):
         """识别棋盘上的棋子位置和高度"""
+        self._detect_objects("chess")
+
+    def detect_fruits(self):
+        """识别图像中的水果"""
+        self._detect_objects("fruit")
+
+    def _detect_objects(self, object_type="chess"):
+        """通用物体检测方法"""
         if not hasattr(self, 'original_frame') or not hasattr(self, 'depth_frame'):
             self.status_label.config(text="⚠️ 未获取到图像数据", fg="red")
             return
 
-        # 使用新添加的函数检测物体和高度信息
-        objects_info, _ = self.detector.detect_objects_with_height(
-            self.original_frame,
-            None,
-            conf_threshold=0.5,
-            iou_threshold=0.4
-        )
+        # 根据物体类型选择正确的模型和检测器
+        if object_type == "chess":
+            # 象棋检测使用专门的象棋模型
+            model_path = os.path.join(dir, '../src/cchessYolo/runs/detect/chess_piece_detection_separate/weights/best.pt')
+            self.detector = ChessPieceDetectorSeparate(model_path)
+        else:  # fruit
+            # 水果检测使用OBB模型
+            model_path = os.path.join(dir, '../src/cchessYolo/runs/obb/fruit_obb_detection4/weights/best.pt')
+            self.detector = FruitOBBTrainer(model_path)
+
+        # 使用相应的方法检测物体和高度信息
+        if object_type == "chess":
+            objects_info, _ = self.detector.detect_objects_with_height(
+                self.original_frame,
+                None,
+                conf_threshold=0.5,
+                iou_threshold=0.4
+            )
+        else:  # fruit
+            # 对于水果检测，使用FruitOBBTrainer的predict方法
+            results, detections = self.detector.predict(
+                source=self.original_frame,
+                conf=0.7,
+                iou=0.45,
+                save=False
+            )
+            # 将OBB检测结果转换为统一格式
+            objects_info = self._convert_obb_detections(detections)
 
         # 创建一个可视化图像用于显示结果
         result_image = self.original_frame.copy()
@@ -253,61 +371,97 @@ class CalibrationApp:
         # 绘制检测到的物体信息
         for obj in objects_info:
             # 获取边界框坐标
-            x1, y1, x2, y2 = obj['bbox']
+            if 'bbox' in obj:  # 常规边界框
+                x1, y1, x2, y2 = obj['bbox']
+            elif 'bbox_vertices' in obj:  # OBB边界框（使用包围矩形）
+                vertices = obj['bbox_vertices']
+                x_coords = [vertices[i] for i in range(0, 8, 2)]
+                y_coords = [vertices[i] for i in range(1, 8, 2)]
+                x1, y1, x2, y2 = min(x_coords), min(y_coords), max(x_coords), max(y_coords)
+            else:
+                # 默认值
+                x1, y1, x2, y2 = obj.get('x1', 0), obj.get('y1', 0), obj.get('x2', 0), obj.get('y2', 0)
+
             class_name = obj['class_name']
             confidence = obj['confidence']
-            height = obj['height']
+            height = obj.get('height', None)
 
             # 绘制边界框
-            cv2.rectangle(result_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.rectangle(result_image, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
 
             # 添加标签
             label = f'{class_name} {confidence:.2f}'
-            cv2.putText(result_image, label, (x1, y1-10),
+            cv2.putText(result_image, label, (int(x1), int(y1)-10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
             # 显示世界坐标
-            # wx,wy = pixel_to_world((x2+x1)/2,(y2+y1)/2)
-
-            wx,wy = multi_camera_pixel_to_world((x2+x1)/2,(y2+y1)/2,self.inverse_matrix,"RED_CAMERA")
+            wx, wy = multi_camera_pixel_to_world((x2+x1)/2, (y2+y1)/2, self.inverse_matrix, "RED_CAMERA")
             xy_text = f'XY: {(x2+x1)/2:.0f} {(y2+y1)/2:.0f}'
             wxy_text = f'WXY: {wx:.0f} {wy:.0f}'
-            cv2.putText(result_image, xy_text, (x1-20, y2 -40),
+            cv2.putText(result_image, xy_text, (int(x1)-20, int(y2) -40),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-
-            cv2.putText(result_image, wxy_text, (x1-40, y2 -20 ),
+            cv2.putText(result_image, wxy_text, (int(x1)-40, int(y2) -20),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-
 
             # 显示高度信息（如果可用）
             if height is not None:
                 height_text = f'H: {height:.3f}m'
-                cv2.putText(result_image, height_text, (x1, y2 + 20),
+                cv2.putText(result_image, height_text, (int(x1), int(y2) + 20),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
         # 显示结果（只显示一帧，2秒后自动关闭）
-        cv2.imshow("Object Detection with Height", result_image)
+        window_title = "Chess Piece Detection with Height" if object_type == "chess" else "Fruit Detection"
+        cv2.imshow(window_title, result_image)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
         # 输出检测结果摘要
         detected_count = len(objects_info)
-        self.status_label.config(text=f"✅ 物体检测完成 - 检测到 {detected_count} 个物体", fg="green")
+        status_text = f"✅ 象棋检测完成 - 检测到 {detected_count} 个棋子" if object_type == "chess" else f"✅ 水果检测完成 - 检测到 {detected_count} 个水果"
+        self.status_label.config(text=status_text, fg="green")
 
         # 打印详细检测信息
-        print(f"\n检测到 {detected_count} 个物体:")
+        obj_name = "棋子" if object_type == "chess" else "水果"
+        print(f"\n检测到 {detected_count} 个{obj_name}:")
         for i, obj in enumerate(objects_info):
-            x, y = obj['center']
-            height_info = f"{obj['height']:.3f}m" if obj['height'] is not None else "N/A"
-            print(f"物体 {i+1}: {obj['class_name']} - 置信度: {obj['confidence']:.2f}, "
+            x, y = obj.get('center', (0, 0))
+            height_info = f"{obj.get('height', 'N/A'):.3f}m" if obj.get('height') is not None else "N/A"
+            print(f"{obj_name} {i+1}: {obj['class_name']} - 置信度: {obj['confidence']:.2f}, "
                   f"中心位置: ({x}, {y}), 高度: {height_info}")
+
+    def _convert_obb_detections(self, detections):
+        """
+        将OBB检测结果转换为统一格式
+        """
+        converted = []
+        for det in detections:
+            # 提取中心点
+            center_x, center_y = det['center']
+
+            # 计算边界框坐标（如果存在bbox_vertices则使用包围矩形）
+            if 'bbox_vertices' in det and len(det['bbox_vertices']) >= 8:
+                vertices = det['bbox_vertices']
+                x_coords = [vertices[i] for i in range(0, 8, 2)]
+                y_coords = [vertices[i] for i in range(1, 8, 2)]
+                x1, y1, x2, y2 = min(x_coords), min(y_coords), max(x_coords), max(y_coords)
+            elif 'bbox' in det and len(det['bbox']) >= 4:
+                x1, y1, x2, y2 = det['bbox']
+            else:
+                # 默认值
+                x1, y1, x2, y2 = center_x - 10, center_y - 10, center_x + 10, center_y + 10
+
+            converted.append({
+                'class_id': det['class_id'],
+                'class_name': det['class_name'],
+                'confidence': det['confidence'],
+                'center': (int(center_x), int(center_y)),
+                'bbox': (int(x1), int(y1), int(x2), int(y2)),
+                'height': None  # OBB检测不直接提供高度信息
+            })
+        return converted
 
     def apply_perspective_correction(self):
         """检测棋盘格并进行透视矫正，保存相机矩阵和畸变系数"""
-        """
-        从指定文件夹中的图像中计算相机矩阵和畸变系数
-        :param image_folder: 图像文件夹路径
-        """
         objp = np.zeros((CHESSBOARD_SHAPE[0] * CHESSBOARD_SHAPE[1], 3), np.float32)
         objp[:, :2] = np.mgrid[0:CHESSBOARD_SHAPE[0], 0:CHESSBOARD_SHAPE[1]].T.reshape(-1, 2)
         objp *= SQUARE_SIZE_MM
@@ -338,17 +492,16 @@ class CalibrationApp:
         if ret:
             if not os.path.exists(OUTPUT_DIR):
                 os.makedirs(OUTPUT_DIR)
-            np.savez(os.path.join(OUTPUT_DIR, "camera_params.npz"), mtx=mtx, dist=dist)
+            np.savez(os.path.join(OUTPUT_DIR, "RED_CAMERA","camera_params.npz"), mtx=mtx, dist=dist)
             self.status_label.config(text="✅ 从图像计算并保存标定矩阵成功", fg="green")
         else:
             self.status_label.config(text="⚠️ 相机标定失败", fg="red")
-
 
     def load_calibration_data(self):
         """
         从文件加载相机矩阵、畸变系数和透视变换矩阵
         """
-        calibration_file = os.path.join(OUTPUT_DIR, "camera_params.npz")
+        calibration_file = os.path.join(OUTPUT_DIR, "RED_CAMERA","camera_params.npz")
 
         if not os.path.exists(calibration_file):
             self.status_label.config(text="⚠️ 未找到标定文件，请先进行标定", fg="red")
@@ -376,7 +529,7 @@ class CalibrationApp:
 
         self.apply_correction = not self.apply_correction
         status = "已启用" if self.apply_correction else "已禁用"
-        self.toggle_label.config(text=f" 实时矫正 {status}", fg="green" if self.apply_correction else "red")
+        self.toggle_label.config(text=f"实时矫正 {status}", fg="green" if self.apply_correction else "red")
 
 
     def on_mouse_move(self, event):
@@ -386,21 +539,37 @@ class CalibrationApp:
 
         if self.show_mouse_coords:
             # 更新鼠标相机坐标
-            self.coord_label.config(text=f"️ 鼠标坐标: ({self.mouse_x}, {self.mouse_y})")
-            wx,wy = pixel_to_world(self.mouse_x, self.mouse_y)
-            self.world_coord_label.config(text=f" 世界坐标: ({wx}, {wy})")
+            coord_text = f"鼠标坐标: ({self.mouse_x}, {self.mouse_y})"
+
+            # 获取深度值（如果可用）
+            depth_text = ""
+            if hasattr(self, 'depth_frame') and self.depth_frame is not None:
+                # 注意：需要将显示坐标转换回原始图像坐标（如果进行了缩放）
+                try:
+                    # 获取深度值（单位：米）
+                    depth_value = self.depth_frame.get_distance(self.mouse_x, self.mouse_y)
+                    if depth_value and depth_value > 0:
+                        depth_text = f", 深度: {depth_value:.3f}m"
+                except:
+                    pass
+
+            self.coord_label.config(text=coord_text + depth_text)
+
+            # 世界坐标转换保持不变
+            wx, wy = pixel_to_world(self.mouse_x, self.mouse_y)
+            self.world_coord_label.config(text=f"世界坐标: ({wx}, {wy})")
 
     def stop_app(self):
         """停止程序"""
         self.running = False
-        self.pipeline.stop()
+        self.camera_manager.release_camera()
         self.root.destroy()
 
     def on_close_window(self):
         """窗口关闭时执行清理"""
         if messagebox.askokcancel("退出", "是否要关闭程序并释放相机资源？"):
             self.running = False
-            self.pipeline.stop()
+            self.camera_manager.release_camera()
             self.root.destroy()
 
     def camera_to_world_coordinates(self, x, y):
@@ -419,6 +588,7 @@ class CalibrationApp:
 
         wx, wy = point_homogeneous[0][0]
         return int(wx), int(wy)
+
     def detect_chess_box(self):
         """使用圆形检测识别棋盒（基于四个圆形贴纸）"""
         if not hasattr(self, 'current_frame'):
@@ -503,21 +673,21 @@ class CalibrationApp:
 
     def update_frame(self):
         """更新视频帧到 canvas"""
-        frames = self.pipeline.wait_for_frames()
-        color_frame = frames.get_color_frame()
-        depth_frame = frames.get_depth_frame()
+        if not self.running:
+            return
 
+        # 使用 CameraManager 获取帧
+        image, depth_frame = self.camera_manager.get_frame()
 
-        if color_frame and depth_frame:
+        if image is not None and depth_frame is not None:
             # 保存彩色帧和深度帧用于拍照
-            self.original_frame = np.asanyarray(color_frame.get_data())
+            self.original_frame = image
             self.depth_frame = depth_frame
 
             # 应用实时矫正
             if self.apply_correction and self.M is not None:
                 # 应用透视矫正
-                # self.current_frame = cv2.warpPerspective(self.original_frame, self.M, (1280, 720))
-                self.current_frame,_ = correct_chessboard_to_square(self.original_frame,CHESS_POINTS_R,self.inverse_matrix)
+                self.current_frame, _ = correct_chessboard_to_square(self.original_frame, CHESS_POINTS_R, self.inverse_matrix)
                 self.original_frame = self.current_frame
             elif self.apply_correction and self.mtx is not None and self.dist is not None:
                 # 回退到畸变矫正
@@ -525,9 +695,34 @@ class CalibrationApp:
                 newcameramtx, roi = cv2.getOptimalNewCameraMatrix(self.mtx, self.dist, (w, h), 1, (w, h))
                 self.current_frame = cv2.undistort(self.original_frame, self.mtx, self.dist, None, newcameramtx)
                 self.original_frame = self.current_frame
-
             else:
                 self.current_frame = self.original_frame.copy()
+
+            # 绘制检测到的正方形
+            if hasattr(self, 'detected_squares') and self.detected_squares:
+                for i, square in enumerate(self.detected_squares):
+                    points = square.reshape(4, 2)
+
+                    # 按照顺序排列四个角点（左上，右上，右下，左下）
+                    ordered_points = self.order_square_points(points)
+
+                    # 计算中心点
+                    center = np.mean(ordered_points, axis=0).astype(int)
+
+                    # 绘制正方形轮廓
+                    cv2.drawContours(self.current_frame, [square], -1, (0, 255, 0), 2)
+
+                    # 绘制四个角点
+                    for j, point in enumerate(ordered_points):
+                        x, y = int(point[0]), int(point[1])
+                        cv2.circle(self.current_frame, (x, y), 5, (0, 0, 255), -1)
+                        cv2.putText(self.current_frame, f"{j + 1}", (x + 10, y + 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+
+                    # 绘制中心点
+                    cv2.circle(self.current_frame, (int(center[0]), int(center[1])), 5, (255, 0, 0), -1)
+                    cv2.putText(self.current_frame, "C", (int(center[0]) + 10, int(center[1]) + 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
 
             # 绘制收棋盒角点
             if self.chess_box_points:
@@ -561,16 +756,9 @@ class CalibrationApp:
                     else:
                         # 达到最大拍照数量，停止自动拍照
                         self.auto_capturing = False
-                        self.manual_button.config(state=tk.NORMAL)
                         self.status_label.config(text=f"已达到最大拍摄数量 {MAX_IMAGES} 张", fg="orange")
                 else:
                     self.countdown -= 15  # 减少15毫秒（大约是update_frame的调用间隔）
-
-            # # 绘制倒计时
-            # if self.auto_capturing and self.countdown > 0:
-            #     countdown_text = f"倒计时: {self.countdown // 1000}s"
-            #     cv2.putText(self.current_frame, countdown_text, (20, 50),
-            #                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
             # 判断图像是否大于 1280x720 并进行缩放
             display_frame = self.current_frame.copy()
@@ -605,9 +793,7 @@ class CalibrationApp:
             self.photo = img_tk
             self.canvas.create_image(0, 0, image=img_tk, anchor='nw')
 
-
         self.root.after(15, self.update_frame)
-
 
 
 if __name__ == "__main__":
