@@ -582,13 +582,13 @@ class HandEyeCalibrationGUI:
         ttk.Entry(board_frame, textvariable=self.board_y_var, width=10).grid(row=1, column=1)
 
         # 机械臂位姿显示（可控制）(可隐藏)
-        self.pose_frame_container = ttk.LabelFrame(control_frame, text="机械臂位姿 (mm, deg)")
+        self.pose_frame_container = ttk.LabelFrame(control_frame, text="机械臂位姿")
         self.pose_frame_container.pack(fill=tk.X, pady=5)
 
         pose_header = ttk.Frame(self.pose_frame_container)
         pose_header.pack(fill=tk.X)
 
-        pose_title = ttk.Label(pose_header, text="机械臂位姿 (mm, deg)")
+        pose_title = ttk.Label(pose_header, text="机械臂位姿")
         pose_title.pack(side=tk.LEFT)
 
         self.pose_toggle_btn = ttk.Button(pose_header, text="隐藏", width=5, command=lambda: self.toggle_collapsible_section('pose'))
@@ -597,40 +597,112 @@ class HandEyeCalibrationGUI:
         self.pose_content_frame = ttk.Frame(self.pose_frame_container)
         self.pose_content_frame.pack(fill=tk.X, pady=5)
 
-        pose_labels = ["X:", "Y:", "Z:", "RX:", "RY:", "RZ:"]
-        self.pose_vars = []
-        self.pose_labels_widgets = []
+        # 创建笛卡尔坐标和关节坐标两个子框架，每个都可以单独隐藏
+        # 笛卡尔坐标框架
+        self.cartesian_container = ttk.LabelFrame(self.pose_content_frame, text="笛卡尔坐标 (mm, deg)")
+        self.cartesian_container.pack(fill=tk.X, pady=5)
 
-        for i, label in enumerate(pose_labels):
-            frame = ttk.Frame(self.pose_content_frame)
-            frame.grid(row=i, column=0, columnspan=3, sticky=tk.W, pady=2)
+        cartesian_header = ttk.Frame(self.cartesian_container)
+        cartesian_header.pack(fill=tk.X)
+
+        cartesian_title = ttk.Label(cartesian_header, text="笛卡尔坐标 (mm, deg)")
+        cartesian_title.pack(side=tk.LEFT)
+
+        self.cartesian_toggle_btn = ttk.Button(cartesian_header, text="隐藏", width=5,
+                                              command=self.toggle_cartesian_section)
+        self.cartesian_toggle_btn.pack(side=tk.RIGHT)
+
+        self.cartesian_content_frame = ttk.Frame(self.cartesian_container)
+        self.cartesian_content_frame.pack(fill=tk.X, pady=5)
+
+        # 关节坐标框架
+        self.joint_container = ttk.LabelFrame(self.pose_content_frame, text="关节坐标 (deg)")
+        self.joint_container.pack(fill=tk.X, pady=5)
+
+        joint_header = ttk.Frame(self.joint_container)
+        joint_header.pack(fill=tk.X)
+
+        joint_title = ttk.Label(joint_header, text="关节坐标 (deg)")
+        joint_title.pack(side=tk.LEFT)
+
+        self.joint_toggle_btn = ttk.Button(joint_header, text="隐藏", width=5,
+                                          command=self.toggle_joint_section)
+        self.joint_toggle_btn.pack(side=tk.RIGHT)
+
+        self.joint_content_frame = ttk.Frame(self.joint_container)
+        self.joint_content_frame.pack(fill=tk.X, pady=5)
+
+        # 笛卡尔坐标显示 (X, Y, Z, RX, RY, RZ) - 每行一个
+        cartesian_labels = ["X:", "Y:", "Z:", "RX:", "RY:", "RZ:"]
+        self.cartesian_vars = []
+        self.cartesian_labels_widgets = []
+
+        for i, label in enumerate(cartesian_labels):
+            frame = ttk.Frame(self.cartesian_content_frame)
+            frame.pack(fill=tk.X, pady=2, padx=5)
 
             ttk.Label(frame, text=label, width=3).pack(side=tk.LEFT)
 
             var = tk.StringVar(value="0.0")
-            label_widget = ttk.Label(frame, textvariable=var, width=10, relief=tk.SUNKEN, anchor=tk.E)
+            label_widget = ttk.Label(frame, textvariable=var, width=12, relief=tk.SUNKEN, anchor=tk.E)
             label_widget.pack(side=tk.LEFT, padx=(0, 5))
 
+            # 添加点动控制按钮
             dec_btn = ttk.Button(frame, text="-", width=3)
             dec_btn.pack(side=tk.LEFT, padx=(0, 2))
 
-            axis_mapping = {0: "X-", 1: "Y-", 2: "Z-", 3: "Rx-", 4: "Ry-", 5: "Rz-"}
-            axis_id = axis_mapping.get(i, f"Axis{i}-")
+            axis_mapping_minus = {0: "X-", 1: "Y-", 2: "Z-", 3: "Rx-", 4: "Ry-", 5: "Rz-"}
+            axis_id_minus = axis_mapping_minus.get(i, f"Axis{i}-")
 
-            dec_btn.bind("<ButtonPress-1>", lambda e, axis=axis_id: self.start_jog(axis))
+            dec_btn.bind("<ButtonPress-1>", lambda e, axis=axis_id_minus: self.start_jog(axis))
             dec_btn.bind("<ButtonRelease-1>", lambda e: self.stop_jog())
 
             inc_btn = ttk.Button(frame, text="+", width=3)
             inc_btn.pack(side=tk.LEFT)
 
-            axis_mapping = {0: "X+", 1: "Y+", 2: "Z+", 3: "Rx+", 4: "Ry+", 5: "Rz+"}
-            axis_id = axis_mapping.get(i, f"Axis{i}+")
+            axis_mapping_plus = {0: "X+", 1: "Y+", 2: "Z+", 3: "Rx+", 4: "Ry+", 5: "Rz+"}
+            axis_id_plus = axis_mapping_plus.get(i, f"Axis{i}+")
 
-            inc_btn.bind("<ButtonPress-1>", lambda e, axis=axis_id: self.start_jog(axis))
+            inc_btn.bind("<ButtonPress-1>", lambda e, axis=axis_id_plus: self.start_jog(axis))
             inc_btn.bind("<ButtonRelease-1>", lambda e: self.stop_jog())
 
-            self.pose_vars.append(var)
-            self.pose_labels_widgets.append(label_widget)
+            self.cartesian_vars.append(var)
+            self.cartesian_labels_widgets.append(label_widget)
+
+        # 关节坐标显示 (J1, J2, J3, J4, J5, J6) - 每行一个
+        joint_labels = ["J1:", "J2:", "J3:", "J4:", "J5:", "J6:"]
+        self.joint_vars = []
+        self.joint_labels_widgets = []
+
+        for i, label in enumerate(joint_labels):
+            frame = ttk.Frame(self.joint_content_frame)
+            frame.pack(fill=tk.X, pady=2, padx=5)
+
+            ttk.Label(frame, text=label, width=3).pack(side=tk.LEFT)
+
+            var = tk.StringVar(value="0.0")
+            label_widget = ttk.Label(frame, textvariable=var, width=12, relief=tk.SUNKEN, anchor=tk.E)
+            label_widget.pack(side=tk.LEFT, padx=(0, 5))
+
+            # 添加点动控制按钮
+            dec_btn = ttk.Button(frame, text="-", width=3)
+            dec_btn.pack(side=tk.LEFT, padx=(0, 2))
+
+            axis_id_minus = f"J{i+1}-"
+            dec_btn.bind("<ButtonPress-1>", lambda e, axis=axis_id_minus: self.start_jog(axis))
+            dec_btn.bind("<ButtonRelease-1>", lambda e: self.stop_jog())
+
+            inc_btn = ttk.Button(frame, text="+", width=3)
+            inc_btn.pack(side=tk.LEFT)
+
+            axis_id_plus = f"J{i+1}+"
+            inc_btn.bind("<ButtonPress-1>", lambda e, axis=axis_id_plus: self.start_jog(axis))
+            inc_btn.bind("<ButtonRelease-1>", lambda e: self.stop_jog())
+
+            self.joint_vars.append(var)
+            self.joint_labels_widgets.append(label_widget)
+
+
 
         # 像素坐标转换区域
         pixel_frame = ttk.LabelFrame(control_frame, text="像素坐标转世界坐标")
@@ -832,6 +904,32 @@ class HandEyeCalibrationGUI:
         self.control_canvas.update_idletasks()
         self.control_canvas.configure(scrollregion=self.control_canvas.bbox("all"))
 
+    def toggle_cartesian_section(self):
+        """切换笛卡尔坐标区域的显示/隐藏状态"""
+        if self.cartesian_content_frame.winfo_viewable():
+            self.cartesian_content_frame.pack_forget()
+            self.cartesian_toggle_btn.config(text="显示")
+        else:
+            self.cartesian_content_frame.pack(fill=tk.X, pady=5)
+            self.cartesian_toggle_btn.config(text="隐藏")
+
+        # 更新滚动区域
+        self.control_canvas.update_idletasks()
+        self.control_canvas.configure(scrollregion=self.control_canvas.bbox("all"))
+
+    def toggle_joint_section(self):
+        """切换关节坐标区域的显示/隐藏状态"""
+        if self.joint_content_frame.winfo_viewable():
+            self.joint_content_frame.pack_forget()
+            self.joint_toggle_btn.config(text="显示")
+        else:
+            self.joint_content_frame.pack(fill=tk.X, pady=5)
+            self.joint_toggle_btn.config(text="隐藏")
+
+        # 更新滚动区域
+        self.control_canvas.update_idletasks()
+        self.control_canvas.configure(scrollregion=self.control_canvas.bbox("all"))
+
     def toggle_connect(self):
         """切换连接状态"""
         if self.robot_connected:
@@ -902,12 +1000,21 @@ class HandEyeCalibrationGUI:
         """更新机械臂位姿显示"""
         if self.robot_connected and self.robot_controller:
             try:
-                # 获取机械臂当前位置
+                # 获取机械臂当前位置（笛卡尔坐标）
                 current_pos = self.robot_controller.get_current_position()
                 if current_pos is not None:
-                    # 更新界面显示的实际位姿
+                    # 更新界面显示的笛卡尔坐标
                     for i in range(min(6, len(current_pos))):
-                        self.pose_vars[i].set(str(round(current_pos[i], 3)))
+                        if i < len(self.cartesian_vars):
+                            self.cartesian_vars[i].set(str(round(current_pos[i], 3)))
+
+                # 获取机械臂当前关节位置
+                current_joint_pos = self.robot_controller.get_current_joint_position()
+                if current_joint_pos is not None:
+                    # 更新界面显示的关节坐标
+                    for i in range(min(6, len(current_joint_pos))):
+                        if i < len(self.joint_vars):
+                            self.joint_vars[i].set(str(round(current_joint_pos[i], 3)))
             except Exception as e:
                 self.result_text.insert(tk.END, f"获取机械臂位姿时出错: {str(e)}\n")
                 self.result_text.see(tk.END)
@@ -986,7 +1093,6 @@ class HandEyeCalibrationGUI:
         speed = int(float(value))
         self.speed_display.config(text=f"{speed}%")
 
-    # 修改 move_to_current_pose 方法，在移动前设置速度
     def move_to_current_pose(self):
         """移动到当前输入的位姿"""
         if not self.robot_connected:
@@ -998,8 +1104,8 @@ class HandEyeCalibrationGUI:
             speed = int(self.robot_speed.get())
             self.robot_controller.set_speed(speed / 100.0)
 
-            # 获取当前显示的位姿值
-            pose = [float(var.get()) for var in self.pose_vars]
+            # 获取当前显示的笛卡尔坐标值
+            pose = [float(var.get()) for var in self.cartesian_vars]
             x, y, z, rx, ry, rz = pose[0], pose[1], pose[2], pose[3], pose[4], pose[5]
 
             # 移动机械臂到指定位置
@@ -1011,6 +1117,7 @@ class HandEyeCalibrationGUI:
         except Exception as e:
             messagebox.showerror("错误", f"移动机械臂时出错: {str(e)}")
         self.result_text.see(tk.END)
+
 
     def move_home(self):
         """机械臂回家"""
@@ -1332,7 +1439,7 @@ class HandEyeCalibrationGUI:
 
         try:
             # 获取当前Z坐标
-            current_z = float(self.pose_vars[2].get())  # Z坐标
+            current_z = float(self.cartesian_vars[2].get())  # Z坐标
 
             # 获取世界坐标
             world_x = float(self.world_x_var.get())
@@ -1348,8 +1455,8 @@ class HandEyeCalibrationGUI:
                 self.result_text.insert(tk.END, f"机械臂已移动到世界坐标: X={world_x:.3f}, Y={world_y:.3f}, Z={current_z:.3f} (速度: {speed}%)\n")
 
                 # 更新位姿显示
-                self.pose_vars[0].set(f"{world_x:.3f}")
-                self.pose_vars[1].set(f"{world_y:.3f}")
+                self.cartesian_vars[0].set(f"{world_x:.3f}")
+                self.cartesian_vars[1].set(f"{world_y:.3f}")
             else:
                 self.result_text.insert(tk.END, f"机械臂移动失败\n")
 

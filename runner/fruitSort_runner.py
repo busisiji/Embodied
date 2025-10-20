@@ -155,13 +155,15 @@ class FruitSortingApp:
             # 打开爪子
             self._gripper_action("open")
 
+            self.urController.set_speed(0.2)
+
             # 下降到抓取高度
             pick_down_position = [world_coords[0], world_coords[1], self.point_down]
             self._move_arm_to_position(pick_down_position)
 
             # 执行抓取动作
             self._gripper_action("grab")
-
+            self.urController.set_speed(0.8)
             # 提升到安全高度
             self._move_arm_to_position(pick_up_position)
 
@@ -200,19 +202,41 @@ class FruitSortingApp:
             print(f"放置水果时出错: {e}")
             return False
 
-    def _move_fruit_from_position_to_target(self, world_coords, target_coord):
+    def _move_fruit_from_position_to_target(self, world_coords, target_coord, detections=None):
         """
-        将水果从一个位置移动到另一个位置
+        将水果从一个位置移动到另一个位置，根据周围环境选择合适的抓取策略
 
         Args:
             world_coords (tuple): 水果当前位置的世界坐标 (x, y)
             target_coord (tuple): 目标位置的世界坐标 (x, y)
+            detections (dict, optional): 检测结果，用于检查周围是否有其他水果
 
         Returns:
             bool: 移动成功返回True，否则返回False
         """
-        # 抓取水果
-        if not self._pick_fruit_at_position(world_coords):
+
+        # 如果提供了检测结果，则检查周围环境并选择合适的抓取策略
+        if detections:
+            collision_info = self._analyze_collision_risk(world_coords, detections)
+
+            if not collision_info['has_collision_risk']:
+                # 没有碰撞风险，使用正常垂直抓取
+                print("无碰撞风险，使用正常垂直抓取")
+                pick_success = self._pick_fruit_at_position(world_coords)
+            elif collision_info['free_angle_range'] >= 120:
+                # 周围至少有120度空闲，使用角度调整抓取
+                print(f"有足够空闲角度({collision_info['free_angle_range']:.1f}°)，使用角度调整抓取")
+                pick_success = self._pick_fruit_with_angle(
+                    world_coords, collision_info['optimal_angle'])
+            else:
+                # 空闲角度不足，使用分步抓取
+                print(f"空闲角度不足({collision_info['free_angle_range']:.1f}°)，使用分步抓取")
+                pick_success = self._pick_fruit_step_by_step(world_coords, detections)
+        else:
+            # 没有检测信息，使用默认垂直抓取
+            pick_success = self._pick_fruit_at_position(world_coords)
+
+        if not pick_success:
             return False
 
         # 放置到目标位置
@@ -220,6 +244,316 @@ class FruitSortingApp:
             return False
 
         return True
+
+    def _analyze_collision_risk(self, target_fruit_coords, detections):
+        """
+        分析目标水果周围的碰撞风险，计算可用角度范围
+
+        Args:
+            target_fruit_coords (tuple): 目标水果的世界坐标 (x, y)
+            detections (dict): 所有检测到的水果信息
+
+        Returns:
+            dict: 包含碰撞风险分析结果的字典
+        """
+        try:
+            collision_radius = 110  # 碰撞检测半径（单位:mm）
+            obstacles = []  # 存储障碍物信息
+
+            # 收集周围障碍物
+            for fruit_type, fruit_list in detections.items():
+                for fruit in fruit_list:
+                    # 获取水果中心坐标
+                    x, y = fruit['center']
+
+                    # 转换为世界坐标
+                    world_coords = self._pixel_to_world(x, y)
+                    if not world_coords:
+                        continue
+
+                    world_x, world_y = world_coords
+
+                    # 排除目标水果本身
+                    distance_to_target = ((world_x - target_fruit_coords[0])**2 +
+                                        (world_y - target_fruit_coords[1])**2)**0.5
+
+                    # 如果其他水果在碰撞半径内，则为障碍物
+                    if distance_to_target < collision_radius and distance_to_target > 5:
+                        # 计算相对于目标水果的角度
+                        angle = np.arctan2(world_y - target_fruit_coords[1],
+                                          world_x - target_fruit_coords[0])
+                        obstacles.append({
+                            'position': (world_x, world_y),
+                            'angle': angle,
+                            'distance': distance_to_target,
+                            'type': fruit_type
+                        })
+
+            if not obstacles:
+                # 没有障碍物
+                return {
+                    'has_collision_risk': False,
+                    'free_angle_range': 360,
+                    'optimal_angle': 0.0,
+                    'obstacles': []
+                }
+
+            # 分析可用角度范围
+            # 将角度转换为0-2π范围并排序
+            angles = [obs['angle'] for obs in obstacles]
+            angles = [(angle + 2*np.pi) % (2*np.pi) for angle in angles]
+            angles.sort()
+
+            # 计算最大连续空闲角度范围
+            max_free_range = 0
+            optimal_angle = 0
+
+            if len(angles) == 1:
+                # 只有一个障碍物
+                max_free_range = 360 - 10  # 留出一些安全距离
+                optimal_angle = (angles[0] + np.pi) % (2*np.pi)  # 对面方向
+            else:
+                # 多个障碍物，寻找最大空隙
+                for i in range(len(angles)):
+                    next_i = (i + 1) % len(angles)
+                    if next_i == 0:
+                        # 跨越2π边界的情况
+                        gap = (2*np.pi - angles[i]) + angles[next_i]
+                    else:
+                        gap = angles[next_i] - angles[i]
+
+                    gap_degrees = np.degrees(gap)
+                    if gap_degrees > max_free_range:
+                        max_free_range = gap_degrees
+                        # 最佳角度是空隙的中点
+                        mid_angle = (angles[i] + gap/2) % (2*np.pi)
+                        optimal_angle = mid_angle
+
+            return {
+                'has_collision_risk': True,
+                'free_angle_range': max_free_range,
+                'optimal_angle': optimal_angle,
+                'obstacles': obstacles
+            }
+
+        except Exception as e:
+            print(f"分析碰撞风险时出错: {e}")
+            # 出错时保守估计
+            return {
+                'has_collision_risk': True,
+                'free_angle_range': 0,
+                'optimal_angle': 0.0,
+                'obstacles': []
+            }
+
+    def _pick_fruit_with_angle(self, world_coords, angle):
+        """
+        带角度的抓取，避开周围水果
+
+        Args:
+            world_coords (tuple): 水果的世界坐标 (x, y)
+            angle (float): 抓取角度（弧度）
+
+        Returns:
+            bool: 抓取成功返回True，否则返回False
+        """
+        try:
+            # 打开爪子
+            self._gripper_action("open")
+
+            # 移动到水果上方（带角度偏移）
+            offset_x =  30 * np.cos(angle)
+            offset_y = -30 * np.sin(angle)
+            offset = 20  # 20mm偏移量
+
+            mid_angle  =  round(angle*(180/np.pi),2)
+            x = world_coords[0]
+            y = world_coords[1]
+            rx = FRUIT_CAMERA[3]
+            ry = FRUIT_CAMERA[4]
+            rz = mid_angle
+
+            if 0 < mid_angle < 90 :
+                ry = ry + offset
+                rz = -180 - rz
+            elif 90 < mid_angle < 180:
+                x = x - offset_x
+                y = y + offset_y
+                rx = rx + offset
+                rz = -rz
+            elif 180 < mid_angle < 270:
+                x = x - offset_x
+                y = y - offset_y
+                ry = ry + offset
+                rz = 180 - rz
+            else:
+                x = x + offset_x
+                y = y - offset_y
+                rx = rx + offset
+                rz = 360 - rz
+
+            if 180 < rz:
+                rz = rz - 360
+            if rz < -180:
+                rz = rz + 360
+            pick_up_position = [x , y , self.point_up,
+                                rx, ry, rz]
+            if not self._move_arm_to_position(pick_up_position):
+                print("无法移动到水果上方")
+                return False
+
+
+            self.urController.set_speed(0.2)
+
+            # 下降到抓取高度（保持偏移）
+            pick_down_position = [x , y , self.point_down,
+                                rx, ry, rz]
+            self._move_arm_to_position(pick_down_position)
+
+            # 执行抓取动作
+            self._gripper_action("grab")
+            self.urController.set_speed(0.8)
+
+            # 提升到安全高度
+            self._move_arm_to_position(pick_up_position)
+
+            return True
+        except Exception as e:
+            print(f"带角度抓取时出错: {e}")
+            return False
+
+    def _pick_fruit_step_by_step(self, world_coords, detections):
+        """
+        分步抓取，先临时移开障碍物再抓取
+
+        Args:
+            world_coords (tuple): 水果的世界坐标 (x, y)
+            detections (dict): 检测结果
+
+        Returns:
+            bool: 抓取成功返回True，否则返回False
+        """
+        try:
+            # 1. 识别需要临时移动的障碍物
+            nearby_obstacles = self._find_nearby_obstacles(world_coords, detections)
+
+            # 2. 临时移动障碍物到安全位置
+            moved_obstacles = []
+            for obstacle in nearby_obstacles:
+                temp_position = self._find_temporary_position(obstacle['position'])
+                if temp_position:
+                    if self._move_fruit_from_position_to_target(obstacle['position'], temp_position, detections):
+                        moved_obstacles.append({
+                            'original_position': obstacle['position'],
+                            'temp_position': temp_position
+                        })
+
+            # 3. 抓取目标水果
+            result = self._pick_fruit_at_position(world_coords)
+
+            # 4. 将临时移动的障碍物放回原位
+            for moved in moved_obstacles:
+                self._move_fruit_from_position_to_target(moved['temp_position'], moved['original_position'], detections)
+
+            return result
+        except Exception as e:
+            print(f"分步抓取时出错: {e}")
+            return False
+
+    def _find_nearby_obstacles(self, target_coords, detections):
+        """
+        查找目标水果附近的障碍物
+
+        Args:
+            target_coords (tuple): 目标水果坐标
+            detections (dict): 检测结果
+
+        Returns:
+            list: 附近的障碍物列表
+        """
+        obstacles = []
+        collision_radius = 110
+
+        for fruit_type, fruit_list in detections.items():
+            for fruit in fruit_list:
+                x, y = fruit['center']
+                world_coords = self._pixel_to_world(x, y)
+                if not world_coords:
+                    continue
+
+                world_x, world_y = world_coords
+
+                # 检查是否为障碍物（在碰撞半径内但不是目标水果）
+                distance_to_target = ((world_x - target_coords[0])**2 +
+                                    (world_y - target_coords[1])**2)**0.5
+
+                if distance_to_target < collision_radius and distance_to_target > 5:
+                    obstacles.append({
+                        'position': world_coords,
+                        'type': fruit_type,
+                        'distance': distance_to_target
+                    })
+
+        return obstacles
+
+    def _find_temporary_position(self, obstacle_position):
+        """
+        寻找临时放置障碍物的安全位置
+
+        Args:
+            obstacle_position (tuple): 障碍物当前位置
+
+        Returns:
+            tuple: 临时安全位置，如果找不到则返回None
+        """
+        # 在目标区域外找一个安全位置
+        # 这里简单实现为向右上方偏移150mm
+        return (obstacle_position[0] + 150, obstacle_position[1] + 150)
+
+    def _would_collide_with_other_fruits(self, target_fruit_coords, detections):
+        """
+        判断抓取目标水果时是否会撞倒周围的其他水果
+
+        Args:
+            target_fruit_coords (tuple): 目标水果的世界坐标 (x, y)
+            detections (dict): 所有检测到的水果信息
+
+        Returns:
+            bool: 如果会撞倒其他水果返回True，否则返回False
+        """
+        try:
+            # 定义碰撞检测半径（单位:mm）
+            collision_radius = 110  # 根据实际情况调整
+
+            # 遍历所有检测到的水果
+            for fruit_type, fruit_list in detections.items():
+                for fruit in fruit_list:
+                    # 获取水果中心坐标
+                    x, y = fruit['center']
+
+                    # 转换为世界坐标
+                    world_coords = self._pixel_to_world(x, y)
+                    if not world_coords:
+                        continue
+
+                    world_x, world_y = world_coords
+
+                    # 排除目标水果本身
+                    distance_to_target = ((world_x - target_fruit_coords[0])**2 +
+                                        (world_y - target_fruit_coords[1])**2)**0.5
+
+                    # 如果其他水果在碰撞半径内，则可能发生碰撞
+                    if distance_to_target < collision_radius and distance_to_target > 5:  # 5mm容差避免误判自己
+                        print(f"检测到邻近水果({fruit_type})可能受干扰，距离: {distance_to_target:.2f}mm")
+                        return True
+
+            return False
+
+        except Exception as e:
+            print(f"检查碰撞状态时出错: {e}")
+            # 出错时保守返回True，避免潜在碰撞风险
+            return True
+
 
     def _pick_and_place_fruit(self, fruit_name, target_position):
         """
@@ -232,10 +566,10 @@ class FruitSortingApp:
         try:
             # 0. 移动到拍照点
             self._gripper_action("grab") # 防止遮挡
-            self.urController.run_point_j(FRUIT_CAMERA)
+            self._move_arm_to_position(FRUIT_CAMERA)
 
             # 1. 检测指定水果
-            detections = self.detect_specific_fruit(self.fruit_classes[fruit_name], fruit_name)
+            all_detections,detections = self.detect_specific_fruit(self.fruit_classes[fruit_name], fruit_name)
             if not detections:
                 asyncio.run(self.system_manager.speak_async(f"未找到{fruit_name}"))
                 return False
@@ -264,7 +598,7 @@ class FruitSortingApp:
                 asyncio.run(self.system_manager.speak_async("无效的目标位置"))
                 return False
             target_world_coord = self._pixel_to_world(target_coord[0], target_coord[1])
-            success = self._move_fruit_from_position_to_target(world_coords, target_world_coord)
+            success = self._move_fruit_from_position_to_target(world_coords, target_world_coord,all_detections)
             if not success:
                 asyncio.run(self.system_manager.speak_async("移动水果过程中出现错误"))
                 return False
@@ -308,7 +642,7 @@ class FruitSortingApp:
                 return False
 
             # 位置判断阈值(mm)
-            position_threshold = 30
+            position_threshold = 110
 
             # 遍历所有检测到的水果
             for fruit_type, detections in all_detections.items():
@@ -539,7 +873,7 @@ class FruitSortingApp:
 
                 try:
                     # 移动水果
-                    success = self._move_fruit_from_position_to_target(world_coords, target_coord)
+                    success = self._move_fruit_from_position_to_target(world_coords, target_coord,all_detections)
                     if success:
                         print(f"已将{chinese_name}放置到位置{target_position}")
                         fruit_count += 1
@@ -605,38 +939,15 @@ class FruitSortingApp:
             fruit_name (str): 水果英文名称
             chinese_name (str): 水果中文名称
         """
-        # 获取相机帧
-        frame_data = self.system_manager.get_camera_frame()
+        # 复用 detect_all_fruits 方法获取所有检测结果
+        all_detections = self.detect_all_fruits()
 
-        # 注意：get_camera_frame 返回的是 (图像, 深度帧) 元组
-        if isinstance(frame_data, tuple):
-            frame = frame_data[0]  # 取第一个元素作为图像
-        else:
-            frame = frame_data
-
-        # 加强帧检查
-        if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
-            print("无法获取相机帧")
-            asyncio.run(self.system_manager.speak_async(f"无法获取相机帧，无法检测{chinese_name}"))
-            return None
-
-        # 保存临时图像文件用于检测
-        temp_image_path = "temp_frame.jpg"
-        cv2.imwrite(temp_image_path, frame)
-
-        # 使用训练好的模型进行预测
-        results, detections = self.fruit_detector.predict(
-            source=temp_image_path,
-            conf=0.25,
-            iou=0.45,
-            save=False  # 不保存结果
-        )
+        # 如果检测失败或没有结果，直接返回
+        if not all_detections:
+            return []
 
         # 筛选出指定类型的水果
-        target_detections = [
-            det for det in detections
-            if det["class_name"] == fruit_name
-        ]
+        target_detections = all_detections.get(fruit_name, [])
 
         if not target_detections:
             print(f"未检测到 {chinese_name}")
@@ -660,7 +971,7 @@ class FruitSortingApp:
 
             print(f"    角度: {detection['angle']}°")
 
-        return target_detections
+        return all_detections,target_detections
 
     def detect_all_fruits(self):
         """
@@ -803,7 +1114,11 @@ class FruitSortingApp:
         Args:
             position (list): [x, y, z] 位置坐标
         """
-        self.urController.move_to(position[0], position[1], position[2])
+        if len(position) == 3:
+            result = self.urController.move_to(position[0], position[1], position[2])
+        elif len( position) == 6:
+            result = self.urController.run_point_j(position)
+        return result
 
     def _gripper_action(self, action):
         """
@@ -854,8 +1169,9 @@ def main():
     # 如果需要启动分拣
     print("启动水果分拣系统...")
     asyncio.run(app.start_sorting())
-    time.sleep(10)
-    app._pick_and_place_fruit('苹果',7)
+    while 1:
+        app._pick_and_place_fruit('苹果',7)
+        time.sleep(10)
     app.system_manager.cleanup()
     return app
 

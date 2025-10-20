@@ -113,7 +113,7 @@ class URController():
 
             # 上电和使能
             self.power_on()
-            # self.enable_robot()
+            self.enable_robot()
 
             # 设置初始速度和加速度
             self.set_speed(0.5)
@@ -238,11 +238,21 @@ class URController():
             print(f"❌ {description}失败: {str(e)}")
             return None
 
-    def _execute_command_async(self,func, point_list=[],description=""):
+    def _execute_command_async(self, func, point_list=[], description=""):
         """异步执行命令的方法，避免阻塞调用线程"""
         if not self.move:
             print(f"⚠️  {description}失败: 连接未建立")
             return None
+
+        # 如果提供了目标点，在执行移动前先检查可达性
+        if point_list :
+            reachable, msg = self.is_point_reachable(
+                point_list[0], point_list[1], point_list[2],
+                point_list[3], point_list[4], point_list[5]
+            )
+            if not reachable:
+                print(f"⚠️ 目标点不可达: {msg}")
+                return None
 
         import threading
         result_container = [None]
@@ -260,7 +270,7 @@ class URController():
                 print("✅ 机械臂运动完成")
             except Exception as e:
                 exception_container[0] = e
-                print("运动时发生错误",e)
+                print("运动时发生错误", e)
             finally:
                 event.set()
 
@@ -286,12 +296,6 @@ class URController():
             self.paused_operations.append(operation)
             while self.paused:
                 self.pause_event.wait()  # 阻塞直到事件被触发
-        # # 设置用户坐标系
-        # self.move.User(0)
-        # # 设置工具坐标系
-        # self.move.Tool(0)
-        # self.dashboard.SetArmOrientation(1,1,1,1)
-        # result = self._execute_command(func, description=description)
         result = self._execute_command_async(func, point_list, description=description)
         return result is not None
     def _execute_with_dashboard(self, func, description=""):
@@ -449,59 +453,22 @@ class URController():
     def is_alarm_active(self):
         """检查是否有活动报警"""
         return self.current_error_status is not None and self.current_error_status != "0"
-    def is_point_reachable(self, x, y, z, rx=None, ry=None, rz=None):
+    def is_point_reachable(self, x, y, z, rx, ry, rz):
         """
-        检查给定点是否可以到达
-
-        @param x: X坐标
-        @param y: Y坐标
-        @param z: Z坐标
-        @param rx: Rx轴角度（可选）
-        @param ry: Ry轴角度（可选）
-        @param rz: Rz轴角度（可选）
-        @return: (bool, str) 是否可到达及原因说明
+        使用API实际验证点位可达性
         """
         try:
-            # 这些值可以根据具体的机械臂型号进行调整
-            max_radius = 600  # 最大工作半径(mm)
-            min_radius = 50  # 最小工作半径(mm)
-            max_height = 400  # 最大工作高度(mm)
-            min_height_limit = -100  # 最小工作高度(mm)
+            # 调用逆解运算API验证点位是否可达
+            result = self.dashboard.InverseSolution(x, y, z, rx, ry, rz)
 
-            # 计算到原点的水平距离
-            horizontal_distance = np.sqrt(x ** 2 + y ** 2)
-
-            if horizontal_distance > max_radius:
-                return False, f"目标点超出最大工作半径 {max_radius}mm"
-
-            if horizontal_distance < min_radius and z < 100:
-                return False, f"目标点在最小工作半径 {min_radius}mm 内且高度过低"
-
-            if z > max_height:
-                return False, f"目标高度 {z} 超出最大工作高度 {max_height}mm"
-
-            if z < min_height_limit:
-                return False, f"目标高度 {z} 低于最小工作高度 {min_height_limit}mm"
-
-            # 6. 检查奇异点区域（简化检查）
-            # 接近Z轴时可能存在奇异点
-            if horizontal_distance < 20 and z < 50:
-                return False, "目标点接近奇异点区域"
-
-            # 7. 检查角度限制（如果提供了角度参数）
-            if rx is not None and ry is not None and rz is not None:
-                # 检查角度是否在合理范围内（-180到180度）
-                angles = [rx, ry, rz]
-                for i, angle in enumerate(angles):
-                    axis_name = ['Rx', 'Ry', 'Rz'][i]
-                    if not -180 <= angle <= 180:
-                        return False, f"{axis_name}轴角度 {angle} 超出范围 [-180, 180]"
-
-            # 如果所有检查都通过
-            return True
+            # 解析返回结果判断是否可达
+            if result and "0" == result.split(",")[0]:  # ErrorID为0表示成功
+                return True, "点位可达"
+            else:
+                return False, "点位不可达"
 
         except Exception as e:
-            return False
+            return False, f"验证过程出错: {str(e)}"
     def is_basic_connected(self):
         """
         基本连接检查 - 只检查socket连接状态
@@ -666,6 +633,7 @@ class URController():
                 result = self.feed.feedBackData()
                 try:
                     self.ToolVectorActual = result["ToolVectorActual"][0]
+                    self.QActual = result["QActual"][0]
                     self.DigitalInputs = result["DigitalInputs"][0]
                     self.DigitalOutputs = result["DigitalOutputs"][0]
                 except Exception as e:
@@ -920,7 +888,7 @@ class URController():
 
     def run_point_j(self, point_list: list):
         """关节运动到指定点"""
-        self._move_to_point(point_list, "joint")
+        return self._move_to_point(point_list, "joint")
 
     def move_home(self):
         """移动到初始位置"""
@@ -1044,6 +1012,17 @@ class URController():
             return self.ToolVectorActual
         except Exception as e:
             print(f"❌ 获取位置失败: {str(e)}")
+            return None
+    def get_current_joint_position(self):
+        """
+        获取当前关节位置
+
+        @return: 当前关节位置 (q1, q2, q3, q4, q5, q6) 或 None（如果获取失败）
+        """
+        try:
+            return self.QActual
+        except Exception as e:
+            print(f"❌ 获取关节位置失败: {str(e)}")
             return None
     def set_do(self, io_index, value):
         """设置数字输出（同步版本，保持向后兼容）"""
