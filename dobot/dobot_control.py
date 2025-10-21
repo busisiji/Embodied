@@ -238,17 +238,18 @@ class URController():
             print(f"❌ {description}失败: {str(e)}")
             return None
 
-    def _execute_command_async(self, func, point_list=[], description=""):
+    def _execute_command_async(self, func, point_list=[], coordinate_mode=0, description=""):
         """异步执行命令的方法，避免阻塞调用线程"""
         if not self.move:
             print(f"⚠️  {description}失败: 连接未建立")
             return None
 
         # 如果提供了目标点，在执行移动前先检查可达性
-        if point_list :
+        if point_list and len(point_list) >= 6:
             reachable, msg = self.is_point_reachable(
                 point_list[0], point_list[1], point_list[2],
-                point_list[3], point_list[4], point_list[5]
+                point_list[3], point_list[4], point_list[5],
+                coordinate_mode
             )
             if not reachable:
                 print(f"⚠️ 目标点不可达: {msg}")
@@ -288,7 +289,7 @@ class URController():
 
         return result_container
 
-    def _execute_with_move(self, func,point_list=[], description=""):
+    def _execute_with_move(self, func, point_list=[], coordinate_mode=0, description=""):
         """执行移动操作"""
         # 记录操作（如果处于暂停状态）
         if self.paused:
@@ -296,7 +297,7 @@ class URController():
             self.paused_operations.append(operation)
             while self.paused:
                 self.pause_event.wait()  # 阻塞直到事件被触发
-        result = self._execute_command_async(func, point_list, description=description)
+        result = self._execute_command_async(func, point_list, coordinate_mode, description=description)
         return result is not None
     def _execute_with_dashboard(self, func, description=""):
         """执行需要dashboard连接的操作"""
@@ -453,22 +454,45 @@ class URController():
     def is_alarm_active(self):
         """检查是否有活动报警"""
         return self.current_error_status is not None and self.current_error_status != "0"
-    def is_point_reachable(self, x, y, z, rx, ry, rz):
+    def is_point_reachable(self, x, y, z, rx, ry, rz, coordinate_mode=0):
         """
         使用API实际验证点位可达性
+        @param x: X坐标或J1角度
+        @param y: Y坐标或J2角度
+        @param z: Z坐标或J3角度
+        @param rx: Rx角度或J4角度
+        @param ry: Ry角度或J5角度
+        @param rz: Rz角度或J6角度
+        @param coordinate_mode: 坐标模式，0为笛卡尔坐标(pose)，1为关节坐标(joint)
+        @return: (bool, str) 是否可达和描述信息
         """
         try:
-            # 调用逆解运算API验证点位是否可达
-            result = self.dashboard.InverseSolution(x, y, z, rx, ry, rz)
+            if coordinate_mode == 0:  # 笛卡尔坐标模式
+                # 使用逆解运算API验证点位是否可达
+                result = self.dashboard.InverseSolution(x, y, z, rx, ry, rz)
 
-            # 解析返回结果判断是否可达
-            if result and "0" == result.split(",")[0]:  # ErrorID为0表示成功
-                return True, "点位可达"
+                # 解析返回结果判断是否可达
+                if result and "0" == result.split(",")[0]:  # ErrorID为0表示成功
+                    return True, "点位可达"
+                else:
+                    return False, "点位不可达"
+
+            elif coordinate_mode == 1:  # 关节坐标模式
+                # 使用正解运算API验证关节坐标是否有效
+                result = self.dashboard.PositiveSolution(x, y, z, rx, ry, rz)
+
+                # 解析返回结果判断是否可达
+                if result and "0" == result.split(",")[0]:  # ErrorID为0表示成功
+                    return True, "关节坐标有效"
+                else:
+                    return False, "关节坐标无效"
+
             else:
-                return False, "点位不可达"
+                return False, f"不支持的坐标模式: {coordinate_mode}"
 
         except Exception as e:
             return False, f"验证过程出错: {str(e)}"
+
     def is_basic_connected(self):
         """
         基本连接检查 - 只检查socket连接状态
@@ -813,12 +837,15 @@ class URController():
         # 应用高度限制
         limited_point = self._apply_height_limit(point_list)
 
+        coordinate_mode = 0  # 默认为笛卡尔坐标模式
+
         if move_type == "linear":
             func = self.move.MovL
             move_desc = "线性移动到"
         else:  # joint
             func = self.move.MovJ
             move_desc = "关节运动到"
+            coordinate_mode = 1
 
         # 执行移动
         point_list = [limited_point[0], limited_point[1], limited_point[2],
@@ -827,6 +854,7 @@ class URController():
             lambda: func(limited_point[0], limited_point[1], limited_point[2],
                  limited_point[3], limited_point[4], limited_point[5]),
             point_list,
+            coordinate_mode,
             description=f"{move_desc} X:{limited_point[0]:.3f}, Y:{limited_point[1]:.3f}, Z:{limited_point[2]:.3f}"
         )
 
@@ -942,6 +970,95 @@ class URController():
 
         except Exception as e:
             print(f"❌ 移动失败: {str(e)}")
+            return False
+    def move_incremental_spatial(self, j1=0, j2=0, j3=0, j4=0, j5=0, j6=0):
+        """
+        在当前位置基础上进行增量移动
+
+        @param j1: 关节1增量角度
+        @param j2: 关节2增量角度
+        @param j3: 关节3增量角度
+        @param j4: 关节4增量角度
+        @param j5: 关节5增量角度
+        @param j6: 关节6增量角度
+        @return: 是否移动成功
+        """
+        try:
+            # 获取当前关节位置
+            current_joints = self.get_current_joint_position()
+            if current_joints is None:
+                print("❌ 无法获取当前关节位置")
+                return False
+
+            # 计算目标关节位置
+            target_joints = [
+                current_joints[0] + j1,
+                current_joints[1] + j2,
+                current_joints[2] + j3,
+                current_joints[3] + j4,
+                current_joints[4] + j5,
+                current_joints[5] + j6
+            ]
+
+            # 执行关节运动到目标位置
+            result = self.run_point_j(target_joints)
+
+            if result:
+                print(f"🕹️ 增量移动完成: J1:{j1}, J2:{j2}, J3:{j3}, J4:{j4}, J5:{j5}, J6:{j6}")
+                return True
+            else:
+                print("❌ 增量移动失败")
+                return False
+
+        except Exception as e:
+            print(f"❌ 增量移动过程中发生错误: {str(e)}")
+            return False
+    def move_incremental_cartesian(self, x=0, y=0, z=0, rx=0, ry=0, rz=0):
+        """
+        在当前位置基础上进行笛卡尔坐标增量移动
+
+        @param x: X轴增量(mm)
+        @param y: Y轴增量(mm)
+        @param z: Z轴增量(mm)
+        @param rx: Rx轴增量角度
+        @param ry: Ry轴增量角度
+        @param rz: Rz轴增量角度
+        @return: 是否移动成功
+        """
+        try:
+            # 获取当前笛卡尔位置
+            current_position = self.get_current_position()
+            if current_position is None:
+                print("❌ 无法获取当前笛卡尔位置")
+                return False
+
+            # 计算目标位置
+            target_position = [
+                current_position[0] + x,
+                current_position[1] + y,
+                current_position[2] + z,
+                current_position[3] + rx,
+                current_position[4] + ry,
+                current_position[5] + rz
+            ]
+
+            # 执行直线运动到目标位置
+            result = self._execute_with_move(
+                lambda: self.move.MovL(target_position[0], target_position[1], target_position[2],
+                                      target_position[3], target_position[4], target_position[5]),
+                target_position,
+                description=f"笛卡尔增量移动 X:{x}, Y:{y}, Z:{z}, Rx:{rx}, Ry:{ry}, Rz:{rz}"
+            )
+
+            if result:
+                print(f"🕹️ 笛卡尔增量移动完成: X:{x}, Y:{y}, Z:{z}, Rx:{rx}, Ry:{ry}, Rz:{rz}")
+                return True
+            else:
+                print("❌ 笛卡尔增量移动失败")
+                return False
+
+        except Exception as e:
+            print(f"❌ 笛卡尔增量移动过程中发生错误: {str(e)}")
             return False
 
     def pick_place(self, x, y, pick_z=0.05, place_z=0.1, use_safety=False):

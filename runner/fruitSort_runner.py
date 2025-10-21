@@ -1,6 +1,7 @@
 # file: /media/jetson/KESU/V10.14/Embodied/runner/fruitSort_runner.py
 import argparse
 import asyncio
+import math
 import os
 import cv2
 import time
@@ -8,7 +9,7 @@ import threading
 import numpy as np
 
 from manager.manager import system_manager
-from runner.handeye_runner import pixel_to_world_coordinates
+from runner.handeye_runner import pixel_to_world_coordinates, calculate_height_compensation
 from src.cchessYolo.fruit_yolo_obb_trainer import FruitOBBTrainer
 from parameters import FRUIT_CAMERA, FRUIT_A_POINT, IO_QI, FRUIT_GRID_POINT
 
@@ -51,6 +52,8 @@ class FruitSortingApp:
             self.system_manager.add_keywords(self.fruit_keywords)
             self.system_manager.register_keyword_callback("水果分拣", self._speech_callback)
 
+        self.default_target_position = 7
+
         # 抓取点
         self.point_up = 350
         self.point_down = 250
@@ -75,6 +78,33 @@ class FruitSortingApp:
         await self.system_manager.speak_async("水果分拣系统已启动")
         print("水果分拣系统已启动")
 
+    def _handle_target_position_command(self, keywords):
+        """处理目标点设置命令"""
+        # 解析命令格式: 设置目标点为{x}
+        command_text = "".join(keywords) if isinstance(keywords, list) else keywords
+
+        # 查找目标位置数字
+        target_position = None
+
+        # 数字映射
+        number_mapping = {
+            "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+            "六": 6, "七": 7, "八": 8, "九": 9,
+            "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
+            "6": 6, "7": 7, "8": 8, "9": 9
+        }
+
+        # 查找命令中的数字
+        for text, number in number_mapping.items():
+            if text in command_text:
+                target_position = number
+                break
+
+        if target_position is not None:
+            self.default_target_position = target_position
+            asyncio.run(self.system_manager.speak_async(f"目标点已设置为{target_position}点"))
+        else:
+            asyncio.run(self.system_manager.speak_async("无法识别目标点，请说出1到9之间的数字"))
     def _speech_callback(self, keywords, full_text):
         """语音识别回调函数"""
         print(f"识别到关键词: {keywords}, 完整文本: {full_text}")
@@ -90,15 +120,22 @@ class FruitSortingApp:
             asyncio.run(self.system_manager.speak_async("系统复位"))
             self._reset_system()
         else:
-            # 检查是否是抓取命令
-            if "抓取" in keywords and ("到" in keywords or "至" in keywords):
-                self._handle_pick_and_place_command(keywords)
-            else:
-                # 检查是否提到了具体的水果
+            if '目标' in keywords:
+                self._handle_target_position_command(keywords)
+            if '抓取' in keywords:
                 for chinese_name, english_name in self.fruit_classes.items():
                     if chinese_name in keywords:
-                        self.detect_specific_fruit(english_name, chinese_name)
+                        self._pick_and_place_fruit(english_name)
                         break
+            # # 检查是否是抓取命令
+            # if "抓取" in keywords and ("到" in keywords or "至" in keywords):
+            #     self._handle_pick_and_place_command(keywords)
+            # else:
+            #     # 检查是否提到了具体的水果
+            #     for chinese_name, english_name in self.fruit_classes.items():
+            #         if chinese_name in keywords:
+            #             self.detect_specific_fruit(english_name, chinese_name)
+            #             break
 
     def _handle_pick_and_place_command(self, keywords):
         """处理抓取命令"""
@@ -137,39 +174,205 @@ class FruitSortingApp:
         else:
             asyncio.run(self.system_manager.speak_async("无法识别抓取命令，请重新表述"))
 
-    def _pick_fruit_at_position(self, world_coords):
+    def _pick_fruit_at_position(self, world_coords, angle=0,fruit_name=None):
         """
         在指定世界坐标位置抓取水果
 
         Args:
             world_coords (tuple): 水果的世界坐标 (x, y)
+            angle (float): 水果的角度（弧度），正右为0度逆时针方向
 
         Returns:
             bool: 抓取成功返回True，否则返回False
         """
         try:
+            # 检查是否为葡萄类水果，如果是则使用更低的抓取点
+            self._set_point_down(fruit_name)
+
+            # 将弧度转换为角度
+            angle_deg = math.degrees(angle)
+
+            # 获取FRUIT_CAMERA的基础姿态
+            base_pose = list(FRUIT_CAMERA)
+
+            # 计算机械臂需要的RZ角度
+            # 图像坐标系: 正右为0度逆时针方向
+            # 机械臂坐标系: 正右为-90度
+            # 需要将夹爪调整为垂直于水果长轴方向
+            rz_angle = -90 + angle_deg  # 基本转换
+
+            # 确保角度在-180到180范围内
+            while rz_angle > 180:
+                rz_angle -= 360
+            while rz_angle < -180:
+                rz_angle += 360
+
+            # 设置最终姿态
+            pick_pose = [
+                world_coords[0],
+                world_coords[1],
+                self.point_up,
+                base_pose[3],  # RX
+                base_pose[4],  # RY
+                rz_angle       # RZ
+            ]
+
             # 移动到水果上方
-            pick_up_position = [world_coords[0], world_coords[1], self.point_up]
-            self._move_arm_to_position(pick_up_position)
+            self._move_arm_to_position(pick_pose)
 
             # 打开爪子
             self._gripper_action("open")
 
             self.urController.set_speed(0.2)
 
-            # 下降到抓取高度
-            pick_down_position = [world_coords[0], world_coords[1], self.point_down]
-            self._move_arm_to_position(pick_down_position)
+            # 下降到抓取高度，保持姿态
+            pick_pose[2] = self.point_down
+            self._move_arm_to_position(pick_pose)
 
             # 执行抓取动作
             self._gripper_action("grab")
             self.urController.set_speed(0.8)
-            # 提升到安全高度
-            self._move_arm_to_position(pick_up_position)
+
+            # 提升到安全高度，保持姿态
+            pick_pose[2] = self.point_up
+            self._move_arm_to_position(pick_pose)
 
             return True
         except Exception as e:
             print(f"抓取水果时出错: {e}")
+            return False
+
+    def _pick_fruit_with_angle(self, world_coords, angle):
+        """
+        带角度的抓取，避开周围水果
+
+        Args:
+            world_coords (tuple): 水果的世界坐标 (x, y)
+            angle (float): 抓取角度（弧度），正右为0度逆时针方向
+
+        Returns:
+            bool: 抓取成功返回True，否则返回False
+        """
+        try:
+            # 打开爪子
+            self._gripper_action("open")
+
+            # 将弧度转换为角度
+            angle_deg = np.degrees(angle)
+
+            # 计算偏移距离和角度
+            offset_distance = 80  # 偏移距离(mm)，可根据需要调整
+
+            # 计算偏移点坐标
+            offset_x = world_coords[0] + offset_distance * np.cos(angle)
+            offset_y = world_coords[1] + offset_distance * np.sin(angle)
+
+            # 获取当前FRUIT_CAMERA的姿态作为基准姿态
+            base_rx, base_ry, base_rz = FRUIT_CAMERA[3], FRUIT_CAMERA[4], FRUIT_CAMERA[5]
+
+            # 计算机械臂需要倾斜的角度
+            # angle是正右为0度逆时针方向，而机械臂坐标系需要转换
+            # 我们希望夹爪朝向目标水果，所以需要计算从偏移点指向目标点的角度
+            target_angle = angle + np.pi  # 反向，使得夹爪朝向目标
+
+            # 计算RX和RY的倾斜角度
+            # RX控制绕X轴旋转(俯仰)，RY控制绕Y轴旋转(偏航)
+            tilt_angle = np.radians(15)  # 倾斜角度，可根据需要调整
+
+            # 根据目标角度计算RX和RY的倾斜分量
+            rx_tilt = tilt_angle * np.sin(target_angle)  # 绕X轴的倾斜
+            ry_tilt = tilt_angle * np.cos(target_angle)  # 绕Y轴的倾斜
+
+            # 计算最终姿态
+            final_rx = base_rx + np.degrees(rx_tilt)
+            final_ry = base_ry + np.degrees(ry_tilt)
+            final_rz = base_rz  # 保持原来的RZ值
+
+            # 限制角度在合理范围内
+            final_rx = np.clip(final_rx, -180, 180)
+            final_ry = np.clip(final_ry, -180, 180)
+
+            # 移动到偏移点上方（带角度）
+            pick_up_position = [
+                offset_x,
+                offset_y,
+                self.point_up,
+                final_rx,
+                final_ry,
+                final_rz
+            ]
+
+            if not self._move_arm_to_position(pick_up_position):
+                print("无法移动到水果偏移点上方")
+                return False
+
+            # 设置较慢的速度以确保精确控制
+            self.urController.set_speed(0.2)
+
+            # 下降到抓取高度（保持姿态）
+            pick_down_position = [
+                offset_x,
+                offset_y,
+                self.point_down,
+                final_rx,
+                final_ry,
+                final_rz
+            ]
+            self._move_arm_to_position(pick_down_position)
+
+            # 执行抓取动作
+            self._gripper_action("grab")
+
+            # 恢复速度
+            self.urController.set_speed(0.8)
+
+            # 提升到安全高度（恢复姿态）
+            self._move_arm_to_position([offset_x,
+                offset_y,self.point_up,base_rx, base_ry, base_rz])
+
+            return True
+        except Exception as e:
+            print(f"带角度抓取时出错: {e}")
+            return False
+
+    def _pick_fruit_step_by_step(self, world_coords, detections,fruit_angle,fruit_name):
+        """
+        分步抓取，先临时移开障碍物再抓取
+
+        Args:
+            world_coords (tuple): 水果的世界坐标 (x, y)
+            detections (dict): 检测结果
+
+        Returns:
+            bool: 抓取成功返回True，否则返回False
+        """
+        try:
+            # 1. 识别需要临时移动的障碍物
+            nearby_obstacles = self._find_nearby_obstacles(world_coords, detections)
+
+            # 2. 临时移动障碍物到安全位置
+            moved_obstacles = []
+            for obstacle in nearby_obstacles:
+                temp_position = self._find_temporary_position(obstacle['position'])
+                if temp_position:
+                    if self._move_fruit_from_position_to_target(obstacle['position'], temp_position,obstacle['fruit_name'], detections):
+                        moved_obstacles.append({
+                            'original_position': obstacle['position'],
+                            'temp_position': temp_position,
+                            'fruit_name': obstacle['fruit_name'],
+
+                        })
+
+            # 3. 抓取目标水果
+            result = self._pick_fruit_at_position(world_coords,fruit_angle,fruit_name)
+
+            # 4. 将临时移动的障碍物放回原位
+            for moved in moved_obstacles:
+                self._move_fruit_from_position_to_target(moved['temp_position'], moved['original_position'], moved['fruit_name'] ,detections)
+
+            return result
+        except Exception as e:
+            print(f"分步抓取时出错: {e}")
             return False
 
     def _place_fruit_at_position(self, target_coord):
@@ -202,7 +405,7 @@ class FruitSortingApp:
             print(f"放置水果时出错: {e}")
             return False
 
-    def _move_fruit_from_position_to_target(self, world_coords, target_coord, detections=None):
+    def _move_fruit_from_position_to_target(self, world_coords, target_coord,fruit_name, detections=None):
         """
         将水果从一个位置移动到另一个位置，根据周围环境选择合适的抓取策略
 
@@ -214,6 +417,15 @@ class FruitSortingApp:
         Returns:
             bool: 移动成功返回True，否则返回False
         """
+        # 查找对应的检测信息以获取角度
+        fruit_angle = 0
+        for fruit_type, fruit_list in detections.items():
+            for fruit in fruit_list:
+                if fruit_type == fruit_name:
+                    fruit_angle = fruit.get('angle', 0)
+                    break
+            if fruit_angle != 0:
+                break
 
         # 如果提供了检测结果，则检查周围环境并选择合适的抓取策略
         if detections:
@@ -222,7 +434,9 @@ class FruitSortingApp:
             if not collision_info['has_collision_risk']:
                 # 没有碰撞风险，使用正常垂直抓取
                 print("无碰撞风险，使用正常垂直抓取")
-                pick_success = self._pick_fruit_at_position(world_coords)
+
+                pick_success = self._pick_fruit_at_position(world_coords, fruit_angle,fruit_name)
+
             elif collision_info['free_angle_range'] >= 120:
                 # 周围至少有120度空闲，使用角度调整抓取
                 print(f"有足够空闲角度({collision_info['free_angle_range']:.1f}°)，使用角度调整抓取")
@@ -231,10 +445,10 @@ class FruitSortingApp:
             else:
                 # 空闲角度不足，使用分步抓取
                 print(f"空闲角度不足({collision_info['free_angle_range']:.1f}°)，使用分步抓取")
-                pick_success = self._pick_fruit_step_by_step(world_coords, detections)
+                pick_success = self._pick_fruit_step_by_step(world_coords, detections,fruit_angle,fruit_name)
         else:
             # 没有检测信息，使用默认垂直抓取
-            pick_success = self._pick_fruit_at_position(world_coords)
+            pick_success = self._pick_fruit_at_position(world_coords, fruit_angle,fruit_name)
 
         if not pick_success:
             return False
@@ -247,8 +461,7 @@ class FruitSortingApp:
 
     def _analyze_collision_risk(self, target_fruit_coords, detections):
         """
-        分析目标水果周围的碰撞风险，计算可用角度范围
-
+        分析目标水果周围的碰撞风险，计算可用角度范围，右轴为0度
         Args:
             target_fruit_coords (tuple): 目标水果的世界坐标 (x, y)
             detections (dict): 所有检测到的水果信息
@@ -257,7 +470,8 @@ class FruitSortingApp:
             dict: 包含碰撞风险分析结果的字典
         """
         try:
-            collision_radius = 110  # 碰撞检测半径（单位:mm）
+            # collision_radius = 110  # 碰撞检测半径（单位:mm）
+            collision_radius = 0  # 碰撞检测半径（单位:mm）
             obstacles = []  # 存储障碍物信息
 
             # 收集周围障碍物
@@ -346,119 +560,6 @@ class FruitSortingApp:
                 'obstacles': []
             }
 
-    def _pick_fruit_with_angle(self, world_coords, angle):
-        """
-        带角度的抓取，避开周围水果
-
-        Args:
-            world_coords (tuple): 水果的世界坐标 (x, y)
-            angle (float): 抓取角度（弧度）
-
-        Returns:
-            bool: 抓取成功返回True，否则返回False
-        """
-        try:
-            # 打开爪子
-            self._gripper_action("open")
-
-            # 移动到水果上方（带角度偏移）
-            offset_x =  30 * np.cos(angle)
-            offset_y = -30 * np.sin(angle)
-            offset = 20  # 20mm偏移量
-
-            mid_angle  =  round(angle*(180/np.pi),2)
-            x = world_coords[0]
-            y = world_coords[1]
-            rx = FRUIT_CAMERA[3]
-            ry = FRUIT_CAMERA[4]
-            rz = mid_angle
-
-            if 0 < mid_angle < 90 :
-                ry = ry + offset
-                rz = -180 - rz
-            elif 90 < mid_angle < 180:
-                x = x - offset_x
-                y = y + offset_y
-                rx = rx + offset
-                rz = -rz
-            elif 180 < mid_angle < 270:
-                x = x - offset_x
-                y = y - offset_y
-                ry = ry + offset
-                rz = 180 - rz
-            else:
-                x = x + offset_x
-                y = y - offset_y
-                rx = rx + offset
-                rz = 360 - rz
-
-            if 180 < rz:
-                rz = rz - 360
-            if rz < -180:
-                rz = rz + 360
-            pick_up_position = [x , y , self.point_up,
-                                rx, ry, rz]
-            if not self._move_arm_to_position(pick_up_position):
-                print("无法移动到水果上方")
-                return False
-
-
-            self.urController.set_speed(0.2)
-
-            # 下降到抓取高度（保持偏移）
-            pick_down_position = [x , y , self.point_down,
-                                rx, ry, rz]
-            self._move_arm_to_position(pick_down_position)
-
-            # 执行抓取动作
-            self._gripper_action("grab")
-            self.urController.set_speed(0.8)
-
-            # 提升到安全高度
-            self._move_arm_to_position(pick_up_position)
-
-            return True
-        except Exception as e:
-            print(f"带角度抓取时出错: {e}")
-            return False
-
-    def _pick_fruit_step_by_step(self, world_coords, detections):
-        """
-        分步抓取，先临时移开障碍物再抓取
-
-        Args:
-            world_coords (tuple): 水果的世界坐标 (x, y)
-            detections (dict): 检测结果
-
-        Returns:
-            bool: 抓取成功返回True，否则返回False
-        """
-        try:
-            # 1. 识别需要临时移动的障碍物
-            nearby_obstacles = self._find_nearby_obstacles(world_coords, detections)
-
-            # 2. 临时移动障碍物到安全位置
-            moved_obstacles = []
-            for obstacle in nearby_obstacles:
-                temp_position = self._find_temporary_position(obstacle['position'])
-                if temp_position:
-                    if self._move_fruit_from_position_to_target(obstacle['position'], temp_position, detections):
-                        moved_obstacles.append({
-                            'original_position': obstacle['position'],
-                            'temp_position': temp_position
-                        })
-
-            # 3. 抓取目标水果
-            result = self._pick_fruit_at_position(world_coords)
-
-            # 4. 将临时移动的障碍物放回原位
-            for moved in moved_obstacles:
-                self._move_fruit_from_position_to_target(moved['temp_position'], moved['original_position'], detections)
-
-            return result
-        except Exception as e:
-            print(f"分步抓取时出错: {e}")
-            return False
 
     def _find_nearby_obstacles(self, target_coords, detections):
         """
@@ -555,7 +656,7 @@ class FruitSortingApp:
             return True
 
 
-    def _pick_and_place_fruit(self, fruit_name, target_position):
+    def _pick_and_place_fruit(self, fruit_name, target_position=None):
         """
         抓取水果并放置到指定位置
 
@@ -564,14 +665,23 @@ class FruitSortingApp:
             target_position (int or str): 目标位置(1-9或A/B)
         """
         try:
+            if target_position is None:
+                target_position = self.default_target_position
+
+            # 保存原始抓取高度
+            original_point_down = self.point_down
+
             # 0. 移动到拍照点
             self._gripper_action("grab") # 防止遮挡
             self._move_arm_to_position(FRUIT_CAMERA)
+            time.sleep(3)
 
             # 1. 检测指定水果
             all_detections,detections = self.detect_specific_fruit(self.fruit_classes[fruit_name], fruit_name)
             if not detections:
                 asyncio.run(self.system_manager.speak_async(f"未找到{fruit_name}"))
+                # 恢复原始抓取高度
+                self.point_down = original_point_down
                 return False
 
             # 取第一个检测到的水果
@@ -587,18 +697,20 @@ class FruitSortingApp:
             # 3. 检查目标位置是否已有其他水果，如果有则先移走
             if isinstance(target_position, int) and 1 <= target_position <= 9:
                 # 检查目标位置是否有其他水果，传递检测结果
-                if self._is_position_occupied(target_position, detections):
+                results = self._is_position_occupied(target_position,[x, y],all_detections)
+                for result in results:
                     print(f"目标位置{target_position}已有水果，先将其移走")
                     # 将目标位置的水果移到FRUIT_A_POINT
-                    self._move_fruit_from_position_to_a_point(target_position)
+                    self._move_fruit_from_position_to_a_point(result[0],result[1],result[2])
 
             # 4. 移动水果到目标位置
             target_coord = self._get_target_coordinates(target_position)
             if not target_coord:
                 asyncio.run(self.system_manager.speak_async("无效的目标位置"))
                 return False
-            target_world_coord = self._pixel_to_world(target_coord[0], target_coord[1])
-            success = self._move_fruit_from_position_to_target(world_coords, target_world_coord,all_detections)
+            target_world_coord = self._pixel_to_world(target_coord[0], target_coord[1],is_height=False)
+            success = self._move_fruit_from_position_to_target(world_coords, target_world_coord,fruit_name,all_detections)
+
             if not success:
                 asyncio.run(self.system_manager.speak_async("移动水果过程中出现错误"))
                 return False
@@ -611,35 +723,62 @@ class FruitSortingApp:
             asyncio.run(self.system_manager.speak_async("抓取过程中出现错误"))
             return False
 
-    def _is_position_occupied(self, position, current_detections=None):
+    def _set_point_down(self,fruit_name):
+        # 检查是否为葡萄类水果，如果是则使用更低的抓取点
+        grape_types = ["g-grape"]  # 葡萄的英文类别名
+        if self.fruit_classes.get(fruit_name, "") in grape_types:
+            self.point_down = 200  # 葡萄使用更低的抓取点
+            print(f"检测到葡萄类水果，使用较低抓取点: {self.point_down}mm")
+        else:
+            self.point_down = 250
+
+    def _is_position_occupied(self, position, point=None, all_detections=None):
         """
         检查指定九宫格位置是否已被占用
 
         Args:
             position (int): 九宫格位置(1-9)
-            current_detections (list): 当前检测到的水果列表，用于排除正在处理的水果
+            point (list): 当前正在处理的水果像素坐标[x, y]
+            all_detections (dict): 所有检测到的水果信息
 
         Returns:
-            bool: 如果位置被占用返回True，否则返回False
+            bool: 位置被占用返回True，否则返回False
         """
         try:
+            results = []
             # 检查位置参数有效性
             if not isinstance(position, int) or position < 1 or position > 9:
                 print(f"无效的位置参数: {position}")
-                return False
+                return results
 
             # 获取目标位置坐标
             if position not in self.grid_points:
                 print(f"位置{position}未在网格点中定义")
-                return False
+                return results
 
             target_coord = self.grid_points[position]
 
-            # 检测所有水果
-            all_detections = self.detect_all_fruits()
+            # 首先检查当前处理的水果是否就在这个位置，如果是则直接返回False（未被占用）
+            # 这是为了防止把正在处理的水果误认为是障碍物
+            if point is not None:
+                # 将当前水果的像素坐标转换为世界坐标
+                current_fruit_world_coord = self._pixel_to_world(point[0], point[1])
+                if current_fruit_world_coord:
+                    current_x, current_y = current_fruit_world_coord
+                    # 计算与目标位置的距离
+                    distance = ((current_x - target_coord[0])**2 +
+                               (current_y - target_coord[1])**2)**0.5
+                    # 如果当前水果就在目标位置，则该位置实际上未被其他水果占用
+                    if distance < 50:  # 50mm阈值，认为是同一位置
+                        print(f"当前处理的水果就在位置{position}，无需移动")
+                        return results
+
             if not all_detections:
-                print(f"位置{position}未被占用（未检测到任何水果）")
-                return False
+                # 检测所有水果
+                all_detections = self.detect_all_fruits()
+                if not all_detections:
+                    print(f"位置{position}未被占用（未检测到任何水果）")
+                    return results
 
             # 位置判断阈值(mm)
             position_threshold = 110
@@ -647,47 +786,31 @@ class FruitSortingApp:
             # 遍历所有检测到的水果
             for fruit_type, detections in all_detections.items():
                 for detection in detections:
-                    # 如果提供了当前检测结果，排除正在处理的水果
-                    if current_detections and detection in current_detections:
-                        continue
-
                     x, y = detection['center']
+                    angle = detection['angle']
                     # 转换像素坐标到世界坐标
                     world_coords = self._pixel_to_world(x, y)
                     if world_coords:
-                        world_x, world_y = world_coords
                         # 计算与目标位置的距离
-                        distance = ((world_x - target_coord[0])**2 +
-                                   (world_y - target_coord[1])**2)**0.5
+                        distance = ((x - target_coord[0])**2 +
+                                   (y - target_coord[1])**2)**0.5
                         if distance < position_threshold:
                             print(f"位置{position}已被{fruit_type}占用，距离: {distance:.2f}mm")
-                            return True
+                            results.append([world_coords,angle,fruit_type])
 
-            print(f"位置{position}未被占用")
-            return False
+            return results
 
         except Exception as e:
             print(f"检查位置占用状态时出错: {e}")
-            # 出错时保守返回True，避免碰撞
-            return True
+            return []
 
-    def _move_fruit_from_position_to_a_point(self, position):
+    def _move_fruit_from_position_to_a_point(self, position,fruit_angle,fruit_name):
         """
         将指定位置的水果移动到A点
-
-        Args:
-            position (int): 九宫格位置(1-9)
         """
         try:
-            # 获取位置坐标
-            if position not in self.grid_points:
-                print(f"无效的位置: {position}")
-                return False
-
-            position_coord = self.grid_points[position]
-
             # 抓取水果
-            pick_success = self._pick_fruit_at_position(position_coord)
+            pick_success = self._pick_fruit_at_position(position,fruit_angle,fruit_name)
             if not pick_success:
                 print(f"在位置{position}抓取水果失败")
                 return False
@@ -711,7 +834,7 @@ class FruitSortingApp:
 
 
     # 坐标转换
-    def _pixel_to_world(self, pixel_x, pixel_y):
+    def _pixel_to_world(self, pixel_x, pixel_y,is_height = True):
         """
         将像素坐标转换为世界坐标
 
@@ -723,6 +846,15 @@ class FruitSortingApp:
             tuple: 世界坐标(x, y)或None
         """
         try:
+            if is_height:
+                try:
+                    # 获取深度数据
+                    depth_data = np.asanyarray(self.depth_frame.get_data())
+                    # 获取指定像素点的深度值
+                    top_depth = depth_data[int(pixel_y), int(pixel_x)] / 1000.0  # 转换为米
+                    pixel_x, pixel_y = calculate_height_compensation((pixel_x, pixel_y),top_depth)
+                except Exception as e:
+                    print(f"高度补偿出错: {e}")
             world_x, world_y = pixel_to_world_coordinates(pixel_x, pixel_y, 'FRUIT_CAMERA')
             return world_x, world_y
         except Exception as e:
@@ -873,7 +1005,7 @@ class FruitSortingApp:
 
                 try:
                     # 移动水果
-                    success = self._move_fruit_from_position_to_target(world_coords, target_coord,all_detections)
+                    success = self._move_fruit_from_position_to_target(world_coords, target_coord,english_name,all_detections)
                     if success:
                         print(f"已将{chinese_name}放置到位置{target_position}")
                         fruit_count += 1
@@ -922,15 +1054,6 @@ class FruitSortingApp:
         target_position = base_position + index
         return min(target_position, 9)
 
-    def detect_fruit(self, color=None, shape=None):
-        """检测水果"""
-        # 使用相机获取图像并分析水果
-        frame = self.system_manager.get_camera_frame()
-        if frame is not None:
-            # 分析水果的颜色和形状
-            pass
-        return None
-
     def detect_specific_fruit(self, fruit_name, chinese_name):
         """
         检测指定类型的水果
@@ -939,7 +1062,6 @@ class FruitSortingApp:
             fruit_name (str): 水果英文名称
             chinese_name (str): 水果中文名称
         """
-        # 复用 detect_all_fruits 方法获取所有检测结果
         all_detections = self.detect_all_fruits()
 
         # 如果检测失败或没有结果，直接返回
@@ -978,13 +1100,7 @@ class FruitSortingApp:
         检测所有类型的水果
         """
         # 获取相机帧
-        frame_data = self.system_manager.get_camera_frame()
-
-        # 注意：get_camera_frame 返回的是 (图像, 深度帧) 元组
-        if isinstance(frame_data, tuple):
-            frame = frame_data[0]  # 取第一个元素作为图像
-        else:
-            frame = frame_data
+        frame, self.depth_frame = self.system_manager.get_camera_frame()
 
         # 加强帧检查
         if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
@@ -1171,7 +1287,7 @@ def main():
     asyncio.run(app.start_sorting())
     while 1:
         app._pick_and_place_fruit('苹果',7)
-        time.sleep(10)
+        time.sleep(5)
     app.system_manager.cleanup()
     return app
 
