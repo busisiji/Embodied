@@ -22,7 +22,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 dir = os.path.dirname(os.path.abspath(__file__))
 
-class HandEyeCalibration:
+class HandEyeCalibration():
     def __init__(self,camera_params = 'RED_CAMERA'):
         # 相机内参矩阵 (示例参数，实际使用时需要相机标定获得)
         self.K = np.array([[0, 0, 0],
@@ -33,6 +33,7 @@ class HandEyeCalibration:
         self.distortion = np.array([[0, 0, 0.0, 0.0, 0]])
         self.filedir = os.path.join(dir, 'calibration', 'output')
         self.filepath = os.path.join(self.filedir,camera_params, 'camera_params.npz')
+        self.use_filepath = None
 
         # 相机外参矩阵 (初始为单位矩阵)
         self.R_camera2base = np.eye(3, dtype=np.float64)  # 旋转矩阵
@@ -84,8 +85,14 @@ class HandEyeCalibration:
         Args:
             filename: 保存的文件名
         """
+        distortion = np.array([0, 0, 0, 0, 0])
         if filepath is None:
             filepath = self.filepath
+        if self.use_filepath == filepath and not np.array_equal(distortion, self.distortion):
+            print("相机参数已存在")
+            return
+
+        self.use_filepath = filepath
 
         if os.path.exists(filepath):
             try:

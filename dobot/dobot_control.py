@@ -75,6 +75,10 @@ class URController():
         self.paused_operations = []  # 记录暂停时的操作
         self.pause_event = threading.Event()  # 用于暂停控制
 
+        # 添加历史操作记录相关属性
+        self.operation_history = []  # 操作历史记录
+        self.max_history_size = 100  # 最大历史记录数
+
         # 启动连接
         self.connect()
 
@@ -215,7 +219,7 @@ class URController():
                 self.pause_event.set()  # 设置事件为触发状态
                 print("▶️ 机械臂已恢复")
 
-                self.wait_mvoe()
+                self.wait_move()
                 return True
             else:
                 print("❌ 恢复指令发送失败")
@@ -225,18 +229,21 @@ class URController():
             print(f"❌ 恢复过程中发生错误: {str(e)}")
             return False
     # 基函数
-
-    def _execute_command(self, func,  description=""):
+    def _execute_command(self, func, description=""):
         """统一执行命令的方法"""
         if not self.move:
             print(f"⚠️  {description}失败: 连接未建立")
             return None
         try:
+            # 记录操作历史
+            self._record_operation(description)
+
             result = func()
             return result
         except Exception as e:
             print(f"❌ {description}失败: {str(e)}")
             return None
+
 
     def _execute_command_async(self, func, point_list=[], coordinate_mode=0, description=""):
         """异步执行命令的方法，避免阻塞调用线程"""
@@ -262,10 +269,10 @@ class URController():
 
         def run_command():
             try:
-                result_container[0] = func()
+                result_container[0] = self._execute_command(func)
                 # sync_result = self.move.Sync() # 会阻塞子线程
                 if point_list:
-                    if not self.wait_arrive(point_list):
+                    if not self.wait_arrive(point_list,coordinate_mode=coordinate_mode):
                         print("❌ 机械臂无法到达指定位置")
                         return
                 print("✅ 机械臂运动完成")
@@ -289,7 +296,7 @@ class URController():
 
         return result_container
 
-    def _execute_with_move(self, func, point_list=[], coordinate_mode=0, description=""):
+    def _execute_with_move(self, func, point_list=[], coordinate_mode=0, description="", sync=True):
         """执行移动操作"""
         # 记录操作（如果处于暂停状态）
         if self.paused:
@@ -297,8 +304,20 @@ class URController():
             self.paused_operations.append(operation)
             while self.paused:
                 self.pause_event.wait()  # 阻塞直到事件被触发
-        result = self._execute_command_async(func, point_list, coordinate_mode, description=description)
-        return result is not None
+
+        if not sync:
+            # 同步执行
+            result = self._execute_command(func, description=description)
+            if point_list:
+                if not self.wait_arrive(point_list,coordinate_mode=coordinate_mode):
+                    print("❌ 机械臂无法到达指定位置")
+                    return
+            return result is not None
+        else:
+            # 异步执行
+            result = self._execute_command_async(func, point_list, coordinate_mode, description=description)
+            return result is not None
+
     def _execute_with_dashboard(self, func, description=""):
         """执行需要dashboard连接的操作"""
 
@@ -312,7 +331,7 @@ class URController():
             return None
 
         try:
-            result = func()
+            result = self._execute_command(func, description="")
             return result
         except Exception as e:
             print(f"❌ {description}失败: {str(e)}")
@@ -380,6 +399,9 @@ class URController():
             print(f"📝 错误详情: {error_msg}")
         if '17' in error_info:
             self.is_wait_no = True
+        if '18' in error_info:
+            print("🔧 正在处理关节超限错误...")
+            self.handle_joint_limit_error()
 
         # 通过WebSocket发送报警信息
         self._send_alarm_notification(f"机械臂报警: 错误代码 {error_info}")
@@ -670,8 +692,14 @@ class URController():
                     self.feed.close()
                 return
 
-    def wait_arrive(self, point_list, timeout=10):
-        """等待机械臂到达目标位置"""
+    def wait_arrive(self, point_list, timeout=30, coordinate_mode=0):
+        """等待机械臂到达目标位置
+
+        @param point_list: 目标位置坐标
+        @param timeout: 超时时间(秒)
+        @param coordinate_mode: 坐标模式，0为笛卡尔坐标(pose)，1为关节坐标(joint)
+        @return: 是否到达目标位置
+        """
         start_time = time.time()
         last_valid_position_time = time.time()
 
@@ -679,33 +707,53 @@ class URController():
             if self.is_wait_no:
                 self.is_wait_no = False
                 return False
-                # 检查是否超时
+            # 检查是否超时
             if time.time() - start_time > timeout:
                 print(f"⚠️ 等待机械臂到达超时 ({timeout}秒)")
                 return False
 
-            current_pos = self.get_current_position()
+            # 根据坐标模式获取当前位置
+            if coordinate_mode == 1:  # 关节坐标模式
+                current_pos = self.get_current_joint_position()
+                tolerance = 5  # 关节坐标使用更小的容差值
+                pos_type = "关节"
+            else:  # 笛卡尔坐标模式
+                current_pos = self.get_current_position()
+                tolerance = 20  # 笛卡尔坐标使用原有容差值
+                pos_type = "笛卡尔"
+
             if current_pos is not None:
                 # 检查位置数据是否有效 (基于返回的坐标值判断)
-                x, y, z = current_pos[0], current_pos[1], current_pos[2]
-                if not (np.isfinite(x) and np.isfinite(y) and np.isfinite(z)):
-                    if time.time() - last_valid_position_time > 5:  # 5秒内未收到有效位置
-                        print("⚠️ 位置数据持续异常")
-                        return False
-                    time.sleep(0.1)
-                    continue
-                else:
-                    last_valid_position_time = time.time()
+                if coordinate_mode == 1:  # 关节坐标
+                    # 检查关节角度数据是否有效
+                    if not all(np.isfinite(angle) for angle in current_pos):
+                        if time.time() - last_valid_position_time > 5:  # 5秒内未收到有效位置
+                            print("⚠️ 关节位置数据持续异常")
+                            return False
+                        time.sleep(0.1)
+                        continue
+                    else:
+                        last_valid_position_time = time.time()
+                else:  # 笛卡尔坐标
+                    x, y, z = current_pos[0], current_pos[1], current_pos[2]
+                    if not (np.isfinite(x) and np.isfinite(y) and np.isfinite(z)):
+                        if time.time() - last_valid_position_time > 5:  # 5秒内未收到有效位置
+                            print("⚠️ 位置数据持续异常")
+                            return False
+                        time.sleep(0.1)
+                        continue
+                    else:
+                        last_valid_position_time = time.time()
 
                 # 检查是否到达目标位置
                 is_arrive = True
                 for index in range(len(current_pos)):
-                    if abs(current_pos[index] - point_list[index]) > 20:
+                    if abs(current_pos[index] - point_list[index]) > tolerance:
                         is_arrive = False
                         break
 
                 if is_arrive:
-                    print("✅ 机械臂已到达目标位置")
+                    print(f"✅ 机械臂已到达目标{pos_type}位置")
                     return True
             else:
                 if time.time() - last_valid_position_time > 5:  # 5秒内未收到有效位置
@@ -832,19 +880,22 @@ class URController():
 
         return limited_point
 
-    def _move_to_point(self, point_list: list, move_type: str):
+    def _move_to_point(self, point_list: list, move_type: str, sync=True):
         """通用移动函数"""
         # 应用高度限制
         limited_point = self._apply_height_limit(point_list)
 
         coordinate_mode = 0  # 默认为笛卡尔坐标模式
 
-        if move_type == "linear":
+        if move_type == "MovL":
             func = self.move.MovL
             move_desc = "线性移动到"
-        else:  # joint
+        elif move_type == 'MovJ':  # joint
             func = self.move.MovJ
             move_desc = "关节运动到"
+        elif move_type == 'JointMovJ':
+            func = self.move.JointMovJ
+            move_desc = "关节坐标，关节运动到"
             coordinate_mode = 1
 
         # 执行移动
@@ -855,7 +906,8 @@ class URController():
                  limited_point[3], limited_point[4], limited_point[5]),
             point_list,
             coordinate_mode,
-            description=f"{move_desc} X:{limited_point[0]:.3f}, Y:{limited_point[1]:.3f}, Z:{limited_point[2]:.3f}"
+            description=f"{move_desc} X:{limited_point[0]:.3f}, Y:{limited_point[1]:.3f}, Z:{limited_point[2]:.3f}",
+            sync=sync
         )
 
         if result:
@@ -863,11 +915,11 @@ class URController():
             return result
         return False
 
-    def wait_mvoe(self):
+    def wait_move(self):
         """等待运动完成"""
         sync_result = self._execute_with_move(
             self.move.Sync,
-            description="等待运动完成"
+            description="等待运动完成",sync=False
         )
         if sync_result:
             print("✅ 机械臂运动完成")
@@ -910,13 +962,63 @@ class URController():
             print(f"❌ 点动操作失败: {str(e)}")
             return False
 
-    def run_point_l(self, point_list: list):
-        """运行到指定点(直线运动)"""
-        self._move_to_point(point_list, "linear")
+    def run_point_l(self, point_list: list, sync=True):
+        """运行到指定点(直线运动),笛卡尔坐标点"""
+        return self._move_to_point(point_list, "MovL", sync=sync)
 
-    def run_point_j(self, point_list: list):
-        """关节运动到指定点"""
-        return self._move_to_point(point_list, "joint")
+    def run_point_j(self, point_list: list, sync=True):
+        """关节运动到指定点,笛卡尔坐标点"""
+        return self._move_to_point(point_list, "MovJ", sync=sync)
+
+    def move_j(self, x=None, y=None, z=None, rx=None, ry=None, rz=None, sync=True):
+        """
+        运动到指定点(关节运动),笛卡尔坐标点
+        @param x,y,z,rx,ry,rz: 笛卡尔坐标，若为None则使用当前关节角度
+        @param sync: 是否同步执行
+        """
+        # 获取当前笛卡尔位置
+        current_position = self.get_current_position()
+        if current_position is None:
+            print("❌ 无法获取当前笛卡尔位置")
+            return False
+
+        # 构建目标位置列表，未指定的使用当前位置
+        target_position = [
+            x if x is not None else current_position[0],
+            y if y is not None else current_position[1],
+            z if z is not None else current_position[2],
+            rx if rx is not None else current_position[3],
+            ry if ry is not None else current_position[4],
+            rz if rz is not None else current_position[5]
+        ]
+
+        # 执行关节运动到目标位置
+        return self._move_to_point(target_position, "MovJ", sync=sync)
+
+
+    def move_joint_j(self, j1=None, j2=None, j3=None, j4=None, j5=None, j6=None, sync=True):
+        """
+        运动到指定点,关节坐标点
+        @param j1-j6: 各关节的目标角度，若为None则使用当前关节角度
+        @param sync: 是否同步执行
+        """
+        # 获取当前关节位置
+        current_joints = self.get_current_joint_position()
+        if current_joints is None:
+            print("❌ 无法获取当前关节位置")
+            return False
+
+        # 构建目标关节位置列表，未指定的使用当前关节角度
+        target_joints = [
+            j1 if j1 is not None else current_joints[0],
+            j2 if j2 is not None else current_joints[1],
+            j3 if j3 is not None else current_joints[2],
+            j4 if j4 is not None else current_joints[3],
+            j5 if j5 is not None else current_joints[4],
+            j6 if j6 is not None else current_joints[5]
+        ]
+
+        return self._move_to_point(target_joints, "JointMovJ", sync=sync)
 
     def move_home(self):
         """移动到初始位置"""
@@ -971,7 +1073,7 @@ class URController():
         except Exception as e:
             print(f"❌ 移动失败: {str(e)}")
             return False
-    def move_incremental_spatial(self, j1=0, j2=0, j3=0, j4=0, j5=0, j6=0):
+    def move_incremental_spatial(self, j1=0, j2=0, j3=0, j4=0, j5=0, j6=0, sync=True):
         """
         在当前位置基础上进行增量移动
 
@@ -1001,7 +1103,13 @@ class URController():
             ]
 
             # 执行关节运动到目标位置
-            result = self.run_point_j(target_joints)
+            result = self.move_joint_j(
+                current_joints[0] + j1,
+                current_joints[1] + j2,
+                current_joints[2] + j3,
+                current_joints[3] + j4,
+                current_joints[4] + j5,
+                current_joints[5] + j6, sync=sync)
 
             if result:
                 print(f"🕹️ 增量移动完成: J1:{j1}, J2:{j2}, J3:{j3}, J4:{j4}, J5:{j5}, J6:{j6}")
@@ -1013,7 +1121,7 @@ class URController():
         except Exception as e:
             print(f"❌ 增量移动过程中发生错误: {str(e)}")
             return False
-    def move_incremental_cartesian(self, x=0, y=0, z=0, rx=0, ry=0, rz=0):
+    def move_incremental_cartesian(self, x=0, y=0, z=0, rx=0, ry=0, rz=0, sync=True):
         """
         在当前位置基础上进行笛卡尔坐标增量移动
 
@@ -1043,12 +1151,7 @@ class URController():
             ]
 
             # 执行直线运动到目标位置
-            result = self._execute_with_move(
-                lambda: self.move.MovL(target_position[0], target_position[1], target_position[2],
-                                      target_position[3], target_position[4], target_position[5]),
-                target_position,
-                description=f"笛卡尔增量移动 X:{x}, Y:{y}, Z:{z}, Rx:{rx}, Ry:{ry}, Rz:{rz}"
-            )
+            result = self.run_point_l(target_position, sync=sync)
 
             if result:
                 print(f"🕹️ 笛卡尔增量移动完成: X:{x}, Y:{y}, Z:{z}, Rx:{rx}, Ry:{ry}, Rz:{rz}")
@@ -1221,7 +1324,7 @@ class URController():
             self.feed.close()
         print("🔌 所有连接已关闭")
 
-    def handle_joint_limit_error(self):
+    def handle_joint_limit_error(self, callback=None):
         """
         处理关节超限错误（错误代码18）
         """
@@ -1234,20 +1337,150 @@ class URController():
 
         time.sleep(1)
 
-        # 2. 执行回家操作
-        print("🏠 执行回家操作以重置关节位置...")
-        self.move_home()
+        # 定义默认的恢复操作回调
+        def default_recovery_callback():
+            return self.move_joint_j(j6=1, sync=False)
 
-        # 3. 等待一段时间确保回家完成
-        time.sleep(3)
+        # 使用提供的回调或默认回调
+        if callback is None:
+            callback = default_recovery_callback
 
-        # 4. 再次检查是否有报警
+        # 执行回调函数
+        result = callback()
+
+        # 3. 再次检查是否有报警
         if self.is_alarm_active():
-            print("❌ 回家操作后仍有报警")
+            print("❌ 操作后仍有报警")
             return False
 
         print("✅ 关节超限错误已处理")
+
+        # 如果没有报警，则重新执行最后一次操作历史记录中的操作
+        last_operation = self.get_last_operation()
+        if last_operation:
+            print("🔄 尝试重新执行最后一次操作...")
+            self.redo_last_operation()
+
         return True
+
+    # 操作历史
+    def _record_operation(self, description):
+        """
+        记录操作历史
+        @param description: 操作描述
+        """
+        import datetime
+        operation_record = {
+            "timestamp": datetime.datetime.now(),
+            "description": description
+        }
+
+        # 添加到历史记录
+        self.operation_history.append(operation_record)
+
+        # 如果历史记录超过最大数量，移除最旧的记录
+        if len(self.operation_history) > self.max_history_size:
+            self.operation_history.pop(0)  # 移除第一个（最旧的）记录
+
+    # 添加获取操作历史的方法
+    def get_operation_history(self):
+        """
+        获取操作历史记录
+        @return: 操作历史记录列表
+        """
+        return self.operation_history.copy()
+
+    def redo_last_operation(self):
+        """
+        重新执行最后一次操作历史记录中的操作
+        @return: 是否成功重新执行
+        """
+        if not self.operation_history:
+            print("⚠️ 没有操作历史记录")
+            return False
+
+        # 获取最后一次操作记录
+        last_operation = self.operation_history[-1]
+        description = last_operation["description"]
+
+        print(f"🔄 重新执行操作: {description}")
+
+        # 根据操作描述重新执行对应的操作
+        try:
+            # 移动相关操作
+            if "移动到" in description or "线性移动到" in description or "关节运动到" in description:
+                # 从描述中提取坐标信息
+                import re
+                coords_match = re.search(r'X:([-\d.]+),\s*Y:([-\d.]+),\s*Z:([-\d.]+)', description)
+                if coords_match:
+                    x, y, z = map(float, coords_match.groups())
+                    # 使用适当的移动函数，这里假设使用关节运动
+                    target_point = [x, y, z] + self.point_o[3:]  # 添加旋转坐标
+                    return self.run_point_j(target_point)
+
+            # DO设置相关操作
+            elif "设置DO[" in description:
+                import re
+                do_match = re.search(r'设置DO\[(\d+)\]\s*=\s*(\d+)', description)
+                if do_match:
+                    io_index, value = map(int, do_match.groups())
+                    return self.set_do(io_index, value)
+
+            # 速度设置相关操作
+            elif "设置速度因子" in description:
+                import re
+                speed_match = re.search(r'设置速度因子为\s*([\d.]+)', description)
+                if speed_match:
+                    speed_factor = float(speed_match.group(1))
+                    return self.set_speed(speed_factor/100 if speed_factor > 1 else speed_factor)
+
+            # 暂停/恢复操作
+            elif "暂停机械臂" in description:
+                return self.pause()
+            elif "恢复机械臂" in description:
+                return self.resume()
+
+            # 上电/使能操作
+            elif "上电" in description:
+                self.power_on()
+                return True
+            elif "使能" in description and "失能" not in description:
+                self.enable_robot()
+                return True
+            elif "失能" in description:
+                self.disable_robot()
+                return True
+
+            # 清除报警操作
+            elif "清除报警" in description:
+                return self.clear_alarm()
+
+            # 如果无法识别具体操作，则提示用户
+            else:
+                print(f"⚠️ 无法自动重新执行此类型操作: {description}")
+                print("📝 操作已记录在历史中，但需要手动重新执行")
+                return False
+
+        except Exception as e:
+            print(f"❌ 重新执行操作时发生错误: {str(e)}")
+            return False
+
+    def get_last_operation(self):
+        """
+        获取最后一次操作的历史记录
+        @return: 最后一次操作记录或None
+        """
+        if not self.operation_history:
+            return None
+        return self.operation_history[-1]
+
+
+    def clear_operation_history(self):
+        """
+        清空操作历史记录
+        """
+        self.operation_history.clear()
+        print("🗑️ 操作历史记录已清空")
 
     def Sync(self):
         """
@@ -1506,7 +1739,8 @@ if __name__ == "__main__":
         #     time.sleep(0.1)
         # x,y = pixel_to_world(114,140)
         # print(x,y)
-        # urController.run_point_j([-173,-198,195,-179,0.2,-179])
+        urController.move_joint_j(j6=1, sync=False)
+        # urController.run_point_j([-286.92800767350906, 4.617575466042698, 74.47807916320197, 10.088019040551517, -90.97148781955832, -286.89171743865063])
         # time.sleep(5)
         # urController.run_point_j(RED_CAMERA)
         # urController.pause()
@@ -1547,7 +1781,7 @@ if __name__ == "__main__":
         # print(urController.is_point_reachable(-400, -440,319)
 
         # time.sleep(1000)
-        alarm_handling_test(urController)
+        # alarm_handling_test(urController)
         # get_dis(urController,1,4)
         # get_dos(urController,1,4)
         # urController.set_do(5, 1)

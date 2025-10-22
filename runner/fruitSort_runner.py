@@ -186,26 +186,25 @@ class FruitSortingApp:
             bool: 抓取成功返回True，否则返回False
         """
         try:
-            # 检查是否为葡萄类水果，如果是则使用更低的抓取点
-            self._set_point_down(fruit_name)
-
             # 将弧度转换为角度
             angle_deg = math.degrees(angle)
+            rz_angle = angle_deg
 
             # 获取FRUIT_CAMERA的基础姿态
             base_pose = list(FRUIT_CAMERA)
+            # 检查是否为葡萄类水果，如果是则使用更低的抓取点
+            if self._set_point_down(fruit_name):
+                # 计算机械臂需要的RZ角度
+                # 图像坐标系: 正右为0度逆时针方向
+                # 机械臂坐标系: 正右为-90度
+                # 需要将夹爪调整为垂直于水果长轴方向
+                rz_angle = 90 + angle_deg  # 基本转换
 
-            # 计算机械臂需要的RZ角度
-            # 图像坐标系: 正右为0度逆时针方向
-            # 机械臂坐标系: 正右为-90度
-            # 需要将夹爪调整为垂直于水果长轴方向
-            rz_angle = -90 + angle_deg  # 基本转换
-
-            # 确保角度在-180到180范围内
-            while rz_angle > 180:
-                rz_angle -= 360
-            while rz_angle < -180:
-                rz_angle += 360
+                # 确保角度在-180到180范围内
+                while rz_angle > 180:
+                    rz_angle -= 360
+                while rz_angle < -180:
+                    rz_angle += 360
 
             # 设置最终姿态
             pick_pose = [
@@ -241,14 +240,41 @@ class FruitSortingApp:
         except Exception as e:
             print(f"抓取水果时出错: {e}")
             return False
-
-    def _pick_fruit_with_angle(self, world_coords, angle):
+    def calculate_xy_offset_from_tilt(self, rx_tilt, ry_tilt, arm_length=300):
         """
-        带角度的抓取，避开周围水果
+        根据机械臂的RX和RY倾斜角度计算XY坐标偏移
+
+        参数:
+        rx_tilt: RX轴倾斜角度（度）
+        ry_tilt: RY轴倾斜角度（度）
+        arm_length: 机械臂长度（mm），默认300mm
+
+        返回:
+        (delta_x, delta_y): XY坐标偏移量
+        """
+        import math
+
+        # 将角度转换为弧度
+        rx_rad = math.radians(rx_tilt)
+        ry_rad = math.radians(ry_tilt)
+
+        # 计算在XY平面上的投影偏移
+        # RX倾斜主要影响Y方向偏移
+        # RY倾斜主要影响X方向偏移
+        delta_x = arm_length * math.sin(ry_rad)
+        delta_y = arm_length * math.sin(rx_rad)
+
+        return delta_x, delta_y
+
+
+    def _pick_fruit_with_angle(self, world_coords, angle, fruit_name=None):
+        """
+        带角度的抓取，避开周围水果，实现3D倾斜抓取
 
         Args:
             world_coords (tuple): 水果的世界坐标 (x, y)
             angle (float): 抓取角度（弧度），正右为0度逆时针方向
+            fruit_name (str): 水果名称，用于确定抓取点高度
 
         Returns:
             bool: 抓取成功返回True，否则返回False
@@ -257,83 +283,78 @@ class FruitSortingApp:
             # 打开爪子
             self._gripper_action("open")
 
+            # 检查是否为葡萄类水果，如果是则使用更低的抓取点
+            self._set_point_down(fruit_name)
+
             # 将弧度转换为角度
-            angle_deg = np.degrees(angle)
+            angle_deg = math.degrees(angle)
 
-            # 计算偏移距离和角度
-            offset_distance = 80  # 偏移距离(mm)，可根据需要调整
+            # 获取FRUIT_CAMERA的基础姿态
+            base_pose = list(FRUIT_CAMERA)
 
-            # 计算偏移点坐标
-            offset_x = world_coords[0] + offset_distance * np.cos(angle)
-            offset_y = world_coords[1] + offset_distance * np.sin(angle)
+            # 计算机械臂需要的RZ角度
+            # 图像坐标系: 正右为0度逆时针方向
+            # 机械臂坐标系: 正右为-90度
+            rz_angle = 90 + angle_deg  # 基本转换
 
-            # 获取当前FRUIT_CAMERA的姿态作为基准姿态
-            base_rx, base_ry, base_rz = FRUIT_CAMERA[3], FRUIT_CAMERA[4], FRUIT_CAMERA[5]
+            # 确保角度在-180到180范围内
+            while rz_angle > 180:
+                rz_angle -= 360
+            while rz_angle < -180:
+                rz_angle += 360
 
-            # 计算机械臂需要倾斜的角度
-            # angle是正右为0度逆时针方向，而机械臂坐标系需要转换
-            # 我们希望夹爪朝向目标水果，所以需要计算从偏移点指向目标点的角度
-            target_angle = angle + np.pi  # 反向，使得夹爪朝向目标
+            # 计算倾斜角度以避开周围水果
+            # 根据抓取角度计算RX和RY的倾斜值，实现从空隙进入的3D倾斜抓取
+            tilt_angle = 25  # 倾斜角度(度)，可根据需要调整
 
-            # 计算RX和RY的倾斜角度
-            # RX控制绕X轴旋转(俯仰)，RY控制绕Y轴旋转(偏航)
-            tilt_angle = np.radians(15)  # 倾斜角度，可根据需要调整
+            # 计算倾斜方向的RX和RY分量
+            # RX控制绕X轴旋转（前后倾斜）
+            # RY控制绕Y轴旋转（左右倾斜）
+            rx_tilt = tilt_angle * math.sin(angle)  # 根据抓取角度计算RX倾斜
+            ry_tilt = -tilt_angle * math.cos(angle)  # 根据抓取角度计算RY倾斜
 
-            # 根据目标角度计算RX和RY的倾斜分量
-            rx_tilt = tilt_angle * np.sin(target_angle)  # 绕X轴的倾斜
-            ry_tilt = tilt_angle * np.cos(target_angle)  # 绕Y轴的倾斜
+            # 限制倾斜角度在合理范围内
+            rx_tilt = max(min(rx_tilt, 30), -30)  # 限制在±30度内
+            ry_tilt = max(min(ry_tilt, 30), -30)  # 限制在±30度内
 
-            # 计算最终姿态
-            final_rx = base_rx + np.degrees(rx_tilt)
-            final_ry = base_ry + np.degrees(ry_tilt)
-            final_rz = base_rz  # 保持原来的RZ值
-
-            # 限制角度在合理范围内
-            final_rx = np.clip(final_rx, -180, 180)
-            final_ry = np.clip(final_ry, -180, 180)
-
-            # 移动到偏移点上方（带角度）
-            pick_up_position = [
-                offset_x,
-                offset_y,
+            # 设置抓取姿态 - 上方位置
+            pick_pose_up = [
+                world_coords[0],
+                world_coords[1],
                 self.point_up,
-                final_rx,
-                final_ry,
-                final_rz
+                base_pose[3],  # RX
+                base_pose[4],  # RY
+                base_pose[5]       # RZ
             ]
 
-            if not self._move_arm_to_position(pick_up_position):
-                print("无法移动到水果偏移点上方")
-                return False
+            # 移动到水果上方（不带倾斜角度）
+            self._move_arm_to_position(pick_pose_up)
 
-            # 设置较慢的速度以确保精确控制
+            # 移动到水果上方（带倾斜角度）
+            # print(f"移动到水果上方，位置: {pick_pose_up}, 倾斜角度: RX={rx_tilt:.2f}, RY={ry_tilt:.2f}")
+            # self.urController.move_incremental_spatial(j4=-rx_tilt,j5=ry_tilt)
+            self.urController.move_joint_j(j6=rz_angle)
+            # # 计算倾斜引起的XY偏移
+            # delta_x, delta_y = self.calculate_xy_offset_from_tilt(rx_tilt, ry_tilt)
+            # self.urController.move_incremental_cartesian(x=-delta_x,y=delta_y)
+
             self.urController.set_speed(0.2)
 
-            # 下降到抓取高度（保持姿态）
-            pick_down_position = [
-                offset_x,
-                offset_y,
-                self.point_down,
-                final_rx,
-                final_ry,
-                final_rz
-            ]
-            self._move_arm_to_position(pick_down_position)
+            # 下降到抓取高度，保持倾斜姿态
+            self.urController.move_j(z=self.point_down)
 
             # 执行抓取动作
             self._gripper_action("grab")
-
-            # 恢复速度
             self.urController.set_speed(0.8)
 
-            # 提升到安全高度（恢复姿态）
-            self._move_arm_to_position([offset_x,
-                offset_y,self.point_up,base_rx, base_ry, base_rz])
+            # 提升到安全高度，保持倾斜姿态
+            self._move_arm_to_position(pick_pose_up)
 
             return True
         except Exception as e:
-            print(f"带角度抓取时出错: {e}")
+            print(f"带角度抓取水果时出错: {e}")
             return False
+
 
     def _pick_fruit_step_by_step(self, world_coords, detections,fruit_angle,fruit_name):
         """
@@ -470,8 +491,8 @@ class FruitSortingApp:
             dict: 包含碰撞风险分析结果的字典
         """
         try:
-            # collision_radius = 110  # 碰撞检测半径（单位:mm）
-            collision_radius = 0  # 碰撞检测半径（单位:mm）
+            collision_radius = 110  # 碰撞检测半径（单位:mm）
+            # collision_radius = 0  # 碰撞检测半径（单位:mm）
             obstacles = []  # 存储障碍物信息
 
             # 收集周围障碍物
@@ -658,7 +679,7 @@ class FruitSortingApp:
 
     def _pick_and_place_fruit(self, fruit_name, target_position=None):
         """
-        抓取水果并放置到指定位置
+        抓取水果并放置到九宫格
 
         Args:
             fruit_name (str): 水果名称
@@ -673,8 +694,15 @@ class FruitSortingApp:
 
             # 0. 移动到拍照点
             self._gripper_action("grab") # 防止遮挡
+            # 还原关节
+            j6 = self.urController.get_current_joint_position()[-1]
+            if -70 < j6 or j6 > 30:
+                self.urController.move_joint_j(j6=1)
+            start_time = time.time()
             self._move_arm_to_position(FRUIT_CAMERA)
-            time.sleep(3)
+            # 移动后等待相机稳定
+            wait_time = time.time() - start_time if time.time() - start_time <=5 else 5
+            time.sleep(wait_time)
 
             # 1. 检测指定水果
             all_detections,detections = self.detect_specific_fruit(self.fruit_classes[fruit_name], fruit_name)
@@ -698,6 +726,8 @@ class FruitSortingApp:
             if isinstance(target_position, int) and 1 <= target_position <= 9:
                 # 检查目标位置是否有其他水果，传递检测结果
                 results = self._is_position_occupied(target_position,[x, y],all_detections)
+                if results is None:
+                    return
                 for result in results:
                     print(f"目标位置{target_position}已有水果，先将其移走")
                     # 将目标位置的水果移到FRUIT_A_POINT
@@ -729,9 +759,10 @@ class FruitSortingApp:
         if self.fruit_classes.get(fruit_name, "") in grape_types:
             self.point_down = 200  # 葡萄使用更低的抓取点
             print(f"检测到葡萄类水果，使用较低抓取点: {self.point_down}mm")
+            return True
         else:
             self.point_down = 250
-
+            return False
     def _is_position_occupied(self, position, point=None, all_detections=None):
         """
         检查指定九宫格位置是否已被占用
@@ -762,16 +793,14 @@ class FruitSortingApp:
             # 这是为了防止把正在处理的水果误认为是障碍物
             if point is not None:
                 # 将当前水果的像素坐标转换为世界坐标
-                current_fruit_world_coord = self._pixel_to_world(point[0], point[1])
-                if current_fruit_world_coord:
-                    current_x, current_y = current_fruit_world_coord
-                    # 计算与目标位置的距离
-                    distance = ((current_x - target_coord[0])**2 +
-                               (current_y - target_coord[1])**2)**0.5
-                    # 如果当前水果就在目标位置，则该位置实际上未被其他水果占用
-                    if distance < 50:  # 50mm阈值，认为是同一位置
-                        print(f"当前处理的水果就在位置{position}，无需移动")
-                        return results
+                current_x, current_y = point[0],point[1]
+                # 计算与目标位置的距离
+                distance = ((current_x - target_coord[0])**2 +
+                           (current_y - target_coord[1])**2)**0.5
+                # 如果当前水果就在目标位置，则该位置实际上未被其他水果占用
+                if distance < 50:  # 50mm阈值，认为是同一位置
+                    print(f"当前处理的水果就在位置{position}，无需移动")
+                    return
 
             if not all_detections:
                 # 检测所有水果
